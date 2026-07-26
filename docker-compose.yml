@@ -1,0 +1,36 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: badminton
+      POSTGRES_PASSWORD: badminton
+      POSTGRES_DB: badminton
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U badminton"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  backend:
+    build: ./backend
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg2://badminton:badminton@db:5432/badminton
+      ADMIN_EMAILS: ${ADMIN_EMAILS:-you@example.com}
+      SECRET_KEY: ${SECRET_KEY:-dev-insecure-secret-change-me}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      OAUTH_REDIRECT_URI: ${OAUTH_REDIRECT_URI:-http://localhost:8000/api/auth/callback}
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:5173}
+      ALLOW_DEV_LOGIN: ${ALLOW_DEV_LOGIN:-false}
+    ports:
+      - "8000:8000"
+
+volumes:
+  pgdata:
