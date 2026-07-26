@@ -6,7 +6,9 @@ services:
       POSTGRES_PASSWORD: badminton
       POSTGRES_DB: badminton
     ports:
-      - "5432:5432"
+      # Host port is configurable to avoid clashing with a local Postgres on 5432.
+      # e.g. DB_HOST_PORT=5433 docker compose up
+      - "${DB_HOST_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
