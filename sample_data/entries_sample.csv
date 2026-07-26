@@ -1,0 +1,72 @@
+Timestamp,Full Name,College Branch,Email,Phone Number,Played States or Nationals,Applying For
+2026/07/02 10:01:00,Aarav Sharma,Computer Science,aarav.sharma@college.edu,9800000000,None,Men's Team
+2026/07/03 10:02:00,Vivaan Gupta,Mechanical,vivaan.gupta@college.edu,9800000137,States,Men's Team
+2026/07/04 10:03:00,Aditya Nair,Electronics,aditya.nair@college.edu,9800000274,Nationals,Men's Team
+2026/07/05 10:04:00,Vihaan Reddy,Civil,vihaan.reddy@college.edu,9800000411,Both,Men's Team
+2026/07/06 10:05:00,Arjun Mehta,Electrical,arjun.mehta@college.edu,9800000548,None,Men's Team
+2026/07/07 10:06:00,Sai Krishnan,Information Tech,sai.krishnan@college.edu,9800000685,States,Men's Team
+2026/07/08 10:07:00,Reyansh Iyer,Chemical,reyansh.iyer@college.edu,9800000822,Nationals,Men's Team
+2026/07/09 10:08:00,Krishna Rao,Biotech,krishna.rao@college.edu,9800000959,Both,Men's Team
+2026/07/10 10:09:00,Ishaan Verma,Aerospace,ishaan.verma@college.edu,9800001096,None,Men's Team
+2026/07/11 10:10:00,Rohan Das,Metallurgy,rohan.das@college.edu,9800001233,States,Men's Team
+2026/07/12 10:11:00,Kabir Chauhan,Computer Science,kabir.chauhan@college.edu,9800001370,Nationals,Men's Team
+2026/07/13 10:12:00,Ayaan Khan,Mechanical,ayaan.khan@college.edu,9800001507,Both,Men's Team
+2026/07/14 10:13:00,Dhruv Patel,Electronics,dhruv.patel@college.edu,9800001644,None,Men's Team
+2026/07/15 10:14:00,Ansh Malhotra,Civil,ansh.malhotra@college.edu,9800001781,States,Men's Team
+2026/07/16 10:15:00,Yuvraj Singh,Electrical,yuvraj.singh@college.edu,9800001918,Nationals,Men's Team
+2026/07/17 10:16:00,Aryan Bose,Information Tech,aryan.bose@college.edu,9800002055,Both,Men's Team
+2026/07/18 10:17:00,Kian Joseph,Chemical,kian.joseph@college.edu,9800002192,None,Men's Team
+2026/07/19 10:18:00,Neel Kulkarni,Biotech,neel.kulkarni@college.edu,9800002329,States,Men's Team
+2026/07/20 10:19:00,Advait Menon,Aerospace,advait.menon@college.edu,9800002466,Nationals,Men's Team
+2026/07/21 10:20:00,Rudra Pillai,Metallurgy,rudra.pillai@college.edu,9800002603,Both,Men's Team
+2026/07/22 10:21:00,Shaurya Sinha,Computer Science,shaurya.sinha@college.edu,9800002740,None,Men's Team
+2026/07/23 10:22:00,Atharv Jain,Mechanical,atharv.jain@college.edu,9800002877,States,Men's Team
+2026/07/24 10:23:00,Om Bhat,Electronics,om.bhat@college.edu,9800003014,Nationals,Men's Team
+2026/07/25 10:24:00,Parth Agarwal,Civil,parth.agarwal@college.edu,9800003151,Both,Men's Team
+2026/07/26 10:25:00,Laksh Chaudhary,Electrical,laksh.chaudhary@college.edu,9800003288,None,Men's Team
+2026/07/27 10:26:00,Veer Saxena,Information Tech,veer.saxena@college.edu,9800003425,States,Men's Team
+2026/07/01 10:27:00,Devansh Kapoor,Chemical,devansh.kapoor@college.edu,9800003562,Nationals,Men's Team
+2026/07/02 10:28:00,Aarush Ghosh,Biotech,aarush.ghosh@college.edu,9800003699,Both,Men's Team
+2026/07/03 10:29:00,Nakul Naidu,Aerospace,nakul.naidu@college.edu,9800003836,None,Men's Team
+2026/07/04 10:30:00,Tejas Banerjee,Metallurgy,tejas.banerjee@college.edu,9800003973,States,Men's Team
+2026/07/05 10:31:00,Harsh Vardhan,Computer Science,harsh.vardhan@college.edu,9800004110,Nationals,Men's Team
+2026/07/06 10:32:00,Manav Trivedi,Mechanical,manav.trivedi@college.edu,9800004247,Both,Men's Team
+2026/07/07 10:33:00,Rishab Shetty,Electronics,rishab.shetty@college.edu,9800004384,None,Men's Team
+2026/07/08 10:34:00,Yash Deshmukh,Civil,yash.deshmukh@college.edu,9800004521,States,Men's Team
+2026/07/09 10:35:00,Karan Dubey,Electrical,karan.dubey@college.edu,9800004658,Nationals,Men's Team
+2026/07/10 10:36:00,Aadhya Sharma,Computer Science,aadhya.sharma@college.edu,9800013700,None,Women's Team
+2026/07/11 10:37:00,Ananya Gupta,Mechanical,ananya.gupta@college.edu,9800013837,States,Women's Team
+2026/07/12 10:38:00,Diya Nair,Electronics,diya.nair@college.edu,9800013974,Nationals,Women's Team
+2026/07/13 10:39:00,Ira Reddy,Civil,ira.reddy@college.edu,9800014111,Both,Women's Team
+2026/07/14 10:40:00,Myra Mehta,Electrical,myra.mehta@college.edu,9800014248,None,Women's Team
+2026/07/15 10:41:00,Anika Krishnan,Information Tech,anika.krishnan@college.edu,9800014385,States,Women's Team
+2026/07/16 10:42:00,Saanvi Iyer,Chemical,saanvi.iyer@college.edu,9800014522,Nationals,Women's Team
+2026/07/17 10:43:00,Kiara Rao,Biotech,kiara.rao@college.edu,9800014659,Both,Women's Team
+2026/07/18 10:44:00,Aarohi Verma,Aerospace,aarohi.verma@college.edu,9800014796,None,Women's Team
+2026/07/19 10:45:00,Riya Das,Metallurgy,riya.das@college.edu,9800014933,States,Women's Team
+2026/07/20 10:46:00,Navya Chauhan,Computer Science,navya.chauhan@college.edu,9800015070,Nationals,Women's Team
+2026/07/21 10:47:00,Prisha Khan,Mechanical,prisha.khan@college.edu,9800015207,Both,Women's Team
+2026/07/22 10:48:00,Sara Patel,Electronics,sara.patel@college.edu,9800015344,None,Women's Team
+2026/07/23 10:49:00,Avni Malhotra,Civil,avni.malhotra@college.edu,9800015481,States,Women's Team
+2026/07/24 10:50:00,Meera Singh,Electrical,meera.singh@college.edu,9800015618,Nationals,Women's Team
+2026/07/25 10:51:00,Ishita Bose,Information Tech,ishita.bose@college.edu,9800015755,Both,Women's Team
+2026/07/26 10:52:00,Zara Joseph,Chemical,zara.joseph@college.edu,9800015892,None,Women's Team
+2026/07/27 10:53:00,Tara Kulkarni,Biotech,tara.kulkarni@college.edu,9800016029,States,Women's Team
+2026/07/01 10:54:00,Kavya Menon,Aerospace,kavya.menon@college.edu,9800016166,Nationals,Women's Team
+2026/07/02 10:55:00,Anvi Pillai,Metallurgy,anvi.pillai@college.edu,9800016303,Both,Women's Team
+2026/07/03 10:56:00,Pari Sinha,Computer Science,pari.sinha@college.edu,9800016440,None,Women's Team
+2026/07/04 10:57:00,Nithya Jain,Mechanical,nithya.jain@college.edu,9800016577,States,Women's Team
+2026/07/05 10:58:00,Siya Bhat,Electronics,siya.bhat@college.edu,9800016714,Nationals,Women's Team
+2026/07/06 10:59:00,Riddhi Agarwal,Civil,riddhi.agarwal@college.edu,9800016851,Both,Women's Team
+2026/07/07 10:00:00,Aria Chaudhary,Electrical,aria.chaudhary@college.edu,9800016988,None,Women's Team
+2026/07/08 10:01:00,Mahi Saxena,Information Tech,mahi.saxena@college.edu,9800017125,States,Women's Team
+2026/07/09 10:02:00,Trisha Kapoor,Chemical,trisha.kapoor@college.edu,9800017262,Nationals,Women's Team
+2026/07/10 10:03:00,Niharika Ghosh,Biotech,niharika.ghosh@college.edu,9800017399,Both,Women's Team
+2026/07/11 10:04:00,Aarav Sharma,Computer Science,dupe1@college.edu,+91 9800000000,States,Men's Team
+2026/07/12 10:05:00,Vivaan Gupta,Mechanical,dupe2@college.edu,09800000137,None,Men's Team
+2026/07/13 10:06:00,Aadhya Sharma,Computer Science,dupe3@college.edu,98000-13700,Both,Women's Team
+2026/07/14 10:07:00,Rahul Nanda  ,  Computer Science , rahul.nanda@college.edu ,  9800008220 , States , Men's Team 
+2026/07/15 10:08:00,Sneha Rao  ,Civil ,sneha.rao@college.edu ,9800021920  ,Nationals,Women's Team 
+2026/07/16 10:09:00,No Phone Guy,Mechanical,nophone@college.edu,,None,Men's Team
+2026/07/17 10:10:00,Confused Entry,Civil,confused@college.edu,9800009590,None,Mixed Doubles
+2026/07/18 10:11:00,,Electrical,noname@college.edu,9800010960,States,Men's Team
