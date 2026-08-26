@@ -20,6 +20,8 @@ router = APIRouter(prefix="/api", tags=["public"])
 
 
 def player_out(p: Player, include_pii: bool) -> PlayerOut:
+    # include_pii is true only for signed-in admins. Phone, registration AND the
+    # shortlist flag are all admin-only — never exposed to the public.
     return PlayerOut(
         id=p.id,
         full_name=p.full_name,
@@ -28,8 +30,8 @@ def player_out(p: Player, include_pii: bool) -> PlayerOut:
         experience_level=p.experience_level,
         year_of_study=p.year_of_study,
         is_walkin=p.is_walkin,
-        flagged=p.flagged,
-        flag_note=p.flag_note,
+        flagged=(p.flagged if include_pii else False),
+        flag_note=(p.flag_note if include_pii else None),
         phone=(p.phone_raw if include_pii else None),
         registration_number=(p.registration_number if include_pii else None),
     )
@@ -45,6 +47,21 @@ def _parse_category(value: str) -> Category:
 @router.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@router.get("/flagged", response_model=list[PlayerOut])
+def flagged_players(request: Request, db: Session = Depends(get_db)):
+    """All ⭐ shortlisted players. Admin-only — the shortlist is not public."""
+    if current_admin_name(request) is None:
+        raise HTTPException(401, "Admin login required.")
+    include_pii = True
+    ps = (
+        db.query(Player)
+        .filter(Player.flagged.is_(True))
+        .order_by(Player.category, Player.group_label.nullsfirst(), Player.full_name)
+        .all()
+    )
+    return [player_out(p, include_pii) for p in ps]
 
 
 @router.get("/groups", response_model=list[GroupSummary])

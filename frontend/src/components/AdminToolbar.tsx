@@ -42,21 +42,6 @@ export default function AdminToolbar({ tournament, category, onChanged }: Props)
     <div className="bg-white border border-slate-200 rounded-xl p-3 space-y-3">
       <div className="flex flex-wrap items-center gap-2">
         <ToolbarBtn onClick={() => setOpen(open === "import" ? null : "import")}>Import CSV</ToolbarBtn>
-        <ToolbarBtn
-          onClick={() =>
-            confirm("Rebuild the 4 men's groups and redraw all of them? This wipes current men's scores.") &&
-            run(() => api.rebuildMen(), (r) => `Men rebuilt: ${JSON.stringify(r.groups && Object.fromEntries(Object.entries(r.groups).map(([k, v]: any) => [k, v.count])))}`)
-          }
-          disabled={busy}
-        >
-          Rebuild men (A–D)
-        </ToolbarBtn>
-        <ToolbarBtn
-          onClick={() => confirm("Redraw the women's 128 bracket? This wipes current women's scores.") && run(() => api.rebuildWomen(), () => "Women's draw rebuilt.")}
-          disabled={busy}
-        >
-          Rebuild women
-        </ToolbarBtn>
         <ToolbarBtn onClick={() => setOpen(open === "walkin" ? null : "walkin")}>+ Walk-in player</ToolbarBtn>
         {tournament && tournament.bracket_size ? (
           locked ? (
@@ -75,6 +60,24 @@ export default function AdminToolbar({ tournament, category, onChanged }: Props)
         {tournament && tournament.bracket_size ? (
           <ToolbarBtn onClick={() => setOpen(open === "scoring" ? null : "scoring")}>Scoring settings</ToolbarBtn>
         ) : null}
+
+        {/* Destructive redraws kept to the end — rarely needed after the initial build. */}
+        <div className="w-px h-6 bg-slate-200 mx-1" />
+        <ToolbarBtn
+          onClick={() => confirm("Redraw the women's 128 bracket? This wipes current women's scores.") && run(() => api.rebuildWomen(), () => "Women's draw rebuilt.")}
+          disabled={busy}
+        >
+          Rebuild women
+        </ToolbarBtn>
+        <ToolbarBtn
+          onClick={() =>
+            confirm("Rebuild the 4 men's groups and redraw all of them? This wipes current men's scores.") &&
+            run(() => api.rebuildMen(), (r) => `Men rebuilt: ${JSON.stringify(r.groups && Object.fromEntries(Object.entries(r.groups).map(([k, v]: any) => [k, v.count])))}`)
+          }
+          disabled={busy}
+        >
+          Rebuild men (A–D)
+        </ToolbarBtn>
         {msg && <span className="text-xs text-slate-500">{msg}</span>}
       </div>
 

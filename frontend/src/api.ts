@@ -120,6 +120,7 @@ export const api = {
   logout: () => req<{ ok: boolean }>("/api/auth/logout", { method: "POST" }),
 
   groups: () => req<GroupSummary[]>("/api/groups"),
+  flagged: () => req<Player[]>("/api/flagged"),
   bracket: (category: Category, group?: string | null) => {
     const q = new URLSearchParams({ category });
     if (group) q.set("group", group);

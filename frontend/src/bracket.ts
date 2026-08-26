@@ -32,6 +32,14 @@ export function roundName(round: number, totalRounds: number): string {
   return `Round of ${size}`;
 }
 
+export function roundNameShort(round: number, totalRounds: number): string {
+  const fromEnd = totalRounds - round;
+  if (fromEnd === 0) return "Final";
+  if (fromEnd === 1) return "SF";
+  if (fromEnd === 2) return "QF";
+  return `R${2 ** (fromEnd + 1)}`;
+}
+
 export function groupByRound(matches: Match[]): Map<number, Match[]> {
   const rounds = new Map<number, Match[]>();
   for (const m of matches) {

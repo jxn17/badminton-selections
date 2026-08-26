@@ -11,6 +11,7 @@ interface Props {
   swapMode: boolean;
   selectedForSwap: number | null;
   onSelectForSwap: (playerId: number) => void;
+  wide?: boolean; // full-width on phones
 }
 
 interface CellPair {
@@ -27,6 +28,7 @@ export default function MatchCard({
   swapMode,
   selectedForSwap,
   onSelectForSwap,
+  wide = false,
 }: Props) {
   const cols = maxGames(format);
   const [cells, setCells] = useState<CellPair[]>([]);
@@ -146,14 +148,23 @@ export default function MatchCard({
             >
               {isByeSlot ? <span className="text-slate-400 italic">Bye</span> : p ? p.full_name : "TBD"}
             </button>
-            {p?.flagged && <span title={p.flag_note ?? "Shortlisted"}>⭐</span>}
+            {editable && p?.flagged && <span title={p.flag_note ?? "Shortlisted"}>⭐</span>}
             {p?.is_walkin && (
               <span className="text-[9px] uppercase bg-purple-100 text-purple-700 px-1 rounded">spot</span>
             )}
           </div>
           <div className="flex items-center gap-1.5 mt-0.5">
             {tag && <span className={`text-[9px] px-1 rounded ${tag.cls}`}>{tag.label}</span>}
-            {editable && p?.phone && <span className="text-[10px] text-slate-400">{p.phone}</span>}
+            {editable && p?.phone && (
+              <a
+                href={`tel:${p.phone}`}
+                onClick={(e) => e.stopPropagation()}
+                className="text-[10px] text-court hover:underline inline-flex items-center gap-0.5"
+                title={`Call ${p.full_name}`}
+              >
+                📞 {p.phone}
+              </a>
+            )}
           </div>
         </div>
         {isRetired && (
@@ -195,7 +206,7 @@ export default function MatchCard({
   };
 
   return (
-    <div className="bg-white rounded-lg border border-slate-200 shadow-sm w-72">
+    <div className={`bg-white rounded-lg border border-slate-200 shadow-sm ${wide ? "w-full" : "w-72"}`}>
       <PlayerRow side="a" id={match.player_a_id} />
       <div className="border-t border-slate-100" />
       <PlayerRow side="b" id={match.player_b_id} />

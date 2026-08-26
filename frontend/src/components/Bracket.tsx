@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Bracket as BracketData, api } from "../api";
-import { groupByRound, playerMap, resolveFormat, roundName } from "../bracket";
+import { groupByRound, playerMap, resolveFormat, roundName, roundNameShort } from "../bracket";
 import MatchCard from "./MatchCard";
 
 interface Props {
@@ -18,17 +18,17 @@ export default function Bracket({ data, editable, onChanged }: Props) {
   const [swapMode, setSwapMode] = useState(false);
   const [selected, setSelected] = useState<number | null>(null);
   const [swapMsg, setSwapMsg] = useState<string | null>(null);
+  const [mobileRound, setMobileRound] = useState<number>(roundNumbers[0] ?? 1);
+
+  useEffect(() => {
+    // Keep the phone round-selector valid when the bracket changes.
+    if (!roundNumbers.includes(mobileRound)) setMobileRound(roundNumbers[0] ?? 1);
+  }, [data.tournament.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function onSelectForSwap(pid: number) {
     setSwapMsg(null);
-    if (selected === null) {
-      setSelected(pid);
-      return;
-    }
-    if (selected === pid) {
-      setSelected(null);
-      return;
-    }
+    if (selected === null) return setSelected(pid);
+    if (selected === pid) return setSelected(null);
     try {
       await api.swap(data.tournament.id, selected, pid);
       setSelected(null);
@@ -50,10 +50,23 @@ export default function Bracket({ data, editable, onChanged }: Props) {
     );
   }
 
+  const cardProps = (m: (typeof data.matches)[number], wide: boolean) => ({
+    key: m.id,
+    match: m,
+    players,
+    format: resolveFormat(data.formats, m.round_number),
+    editable,
+    onChanged,
+    swapMode,
+    selectedForSwap: selected,
+    onSelectForSwap,
+    wide,
+  });
+
   return (
     <div>
       {editable && (
-        <div className="mb-3 flex items-center gap-2 text-sm">
+        <div className="mb-3 flex items-center gap-2 text-sm flex-wrap">
           <button
             onClick={() => {
               setSwapMode((v) => !v);
@@ -67,15 +80,41 @@ export default function Bracket({ data, editable, onChanged }: Props) {
           {swapMode && (
             <span className="text-xs text-slate-500">
               {selected === null
-                ? "Click a player, then click who to swap them with."
-                : `Selected ${players.get(selected)?.full_name ?? ""} — now click the other player.`}
+                ? "Tap a player, then tap who to swap them with."
+                : `Selected ${players.get(selected)?.full_name ?? ""} — now tap the other player.`}
             </span>
           )}
           {swapMsg && <span className="text-xs text-slate-500">{swapMsg}</span>}
         </div>
       )}
 
-      <div className="overflow-x-auto pb-4">
+      {/* Phone view: pick a round, see its matches stacked full-width. */}
+      <div className="md:hidden">
+        <div className="flex gap-1.5 overflow-x-auto pb-2 -mx-1 px-1">
+          {roundNumbers.map((rn) => (
+            <button
+              key={rn}
+              onClick={() => setMobileRound(rn)}
+              className={`shrink-0 px-3 py-1.5 rounded-full text-xs font-medium border ${
+                mobileRound === rn ? "bg-court text-white border-court" : "bg-white text-slate-600 border-slate-200"
+              }`}
+            >
+              {roundNameShort(rn, totalRounds)}
+            </button>
+          ))}
+        </div>
+        <div className="text-xs text-slate-400 mb-2">
+          {roundName(mobileRound, totalRounds)} · {rounds.get(mobileRound)?.length ?? 0} matches
+        </div>
+        <div className="space-y-3">
+          {rounds.get(mobileRound)!.map((m) => (
+            <MatchCard {...cardProps(m, true)} />
+          ))}
+        </div>
+      </div>
+
+      {/* Desktop / tablet view: full horizontal bracket. */}
+      <div className="hidden md:block overflow-x-auto pb-4">
         <div className="flex gap-8 min-w-max">
           {roundNumbers.map((rn) => {
             const fmt = resolveFormat(data.formats, rn);
@@ -91,17 +130,7 @@ export default function Bracket({ data, editable, onChanged }: Props) {
                 </div>
                 <div className="flex flex-col justify-around gap-4 h-full">
                   {rounds.get(rn)!.map((m) => (
-                    <MatchCard
-                      key={m.id}
-                      match={m}
-                      players={players}
-                      format={fmt}
-                      editable={editable}
-                      onChanged={onChanged}
-                      swapMode={swapMode}
-                      selectedForSwap={selected}
-                      onSelectForSwap={onSelectForSwap}
-                    />
+                    <MatchCard {...cardProps(m, false)} />
                   ))}
                 </div>
               </div>

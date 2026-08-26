@@ -4,6 +4,7 @@ import { useAuth } from "./useAuth";
 import Bracket from "./components/Bracket";
 import AdminToolbar from "./components/AdminToolbar";
 import LoginBar from "./components/LoginBar";
+import FlaggedList from "./components/FlaggedList";
 
 interface Selection {
   category: Category;
@@ -18,11 +19,18 @@ export default function App() {
   const [data, setData] = useState<BracketData | null>(null);
   const [loading, setLoading] = useState(true);
   const [showLogin, setShowLogin] = useState(false);
+  const [view, setView] = useState<"bracket" | "flagged">("bracket");
+  const [flaggedCount, setFlaggedCount] = useState(0);
   const timer = useRef<number | null>(null);
 
   const loadGroups = useCallback(async () => {
     try {
       setGroups(await api.groups());
+    } catch {
+      /* ignore */
+    }
+    try {
+      setFlaggedCount((await api.flagged()).length);
     } catch {
       /* ignore */
     }
@@ -69,6 +77,11 @@ export default function App() {
     if (sel) loadBracket(sel);
     loadGroups();
   }, [sel, loadBracket, loadGroups]);
+
+  // The shortlist is admin-only; drop back to the bracket if an admin signs out.
+  useEffect(() => {
+    if (!auth.isAdmin && view === "flagged") setView("bracket");
+  }, [auth.isAdmin, view]);
 
   const menGroups = useMemo(
     () => groups.filter((g) => g.category === "men").sort((a, b) => (a.group_label ?? "").localeCompare(b.group_label ?? "")),
@@ -149,8 +162,22 @@ export default function App() {
             )}
           </div>
 
+          {auth.isAdmin && (
+            <>
+              <div className="w-px h-6 bg-slate-200" />
+              <button
+                onClick={() => setView((v) => (v === "flagged" ? "bracket" : "flagged"))}
+                className={`px-3 py-1.5 text-sm rounded-md border ${
+                  view === "flagged" ? "bg-amber-400 text-white border-amber-400" : "bg-white text-slate-600 border-slate-200"
+                }`}
+              >
+                ⭐ Shortlist<span className="ml-1 text-[10px] opacity-80">{flaggedCount}</span>
+              </button>
+            </>
+          )}
+
           <div className="flex-1" />
-          {t && t.bracket_size ? (
+          {view === "bracket" && t && t.bracket_size ? (
             <div className="text-xs text-slate-500 flex items-center gap-3">
               <span>Bracket {t.bracket_size}</span>
               <span>{t.num_byes} byes</span>
@@ -162,18 +189,27 @@ export default function App() {
           ) : null}
         </div>
 
-        {auth.isAdmin && (
-          <AdminToolbar tournament={t ?? null} category={sel?.category ?? "men"} onChanged={refresh} />
-        )}
-
-        {loading && <div className="py-16 text-center text-slate-400">Loading…</div>}
-        {!loading && data && (
-          <div className="mt-4">
-            <div className="text-sm text-slate-500 mb-2">
-              {sel?.category === "men" ? `Men's — Group ${sel?.group}` : "Women's"} · {data.players.length} players
-            </div>
-            <Bracket data={data} editable={auth.isAdmin} onChanged={refresh} />
+        {view === "flagged" ? (
+          <div className="mt-2">
+            <div className="text-sm text-slate-500 mb-3">Shortlisted players (flagged ⭐ from the brackets)</div>
+            <FlaggedList editable={auth.isAdmin} onChanged={refresh} />
           </div>
+        ) : (
+          <>
+            {auth.isAdmin && (
+              <AdminToolbar tournament={t ?? null} category={sel?.category ?? "men"} onChanged={refresh} />
+            )}
+
+            {loading && <div className="py-16 text-center text-slate-400">Loading…</div>}
+            {!loading && data && (
+              <div className="mt-4">
+                <div className="text-sm text-slate-500 mb-2">
+                  {sel?.category === "men" ? `Men's — Group ${sel?.group}` : "Women's"} · {data.players.length} players
+                </div>
+                <Bracket data={data} editable={auth.isAdmin} onChanged={refresh} />
+              </div>
+            )}
+          </>
         )}
       </main>
 
