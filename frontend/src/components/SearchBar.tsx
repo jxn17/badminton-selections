@@ -91,7 +91,10 @@ export default function SearchBar({ isAdmin, onPick, onChanged }: Props) {
                     </a>
                   )}
                   {isAdmin && (
-                    <button onClick={() => remove(r)} className="text-xs text-red-500 hover:underline">
+                    <button
+                      onClick={() => remove(r)}
+                      className="text-xs font-medium px-2.5 py-1 rounded-md border border-red-300 text-red-600 bg-red-50 hover:bg-red-100"
+                    >
                       Remove
                     </button>
                   )}
