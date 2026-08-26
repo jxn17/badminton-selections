@@ -1,14 +1,16 @@
 import { useEffect, useState } from "react";
-import { ApiError, Category, Game, Match, Player, RoundFormat, api } from "../api";
-import { maxGames } from "../bracket";
+import { ApiError, Game, Match, Player, RoundFormat, api } from "../api";
+import { expTag, maxGames } from "../bracket";
 
 interface Props {
   match: Match;
   players: Map<number, Player>;
   format: RoundFormat;
-  category: Category;
   editable: boolean;
   onChanged: () => void;
+  swapMode: boolean;
+  selectedForSwap: number | null;
+  onSelectForSwap: (playerId: number) => void;
 }
 
 interface CellPair {
@@ -16,29 +18,22 @@ interface CellPair {
   b: string;
 }
 
-function nameOf(players: Map<number, Player>, id: number | null): string {
-  if (id === null) return "TBD";
-  return players.get(id)?.full_name ?? `#${id}`;
-}
-
-function branchOf(players: Map<number, Player>, id: number | null): string | null {
-  if (id === null) return null;
-  return players.get(id)?.college_branch ?? null;
-}
-
 export default function MatchCard({
   match,
   players,
   format,
-  category,
   editable,
   onChanged,
+  swapMode,
+  selectedForSwap,
+  onSelectForSwap,
 }: Props) {
   const cols = maxGames(format);
   const [cells, setCells] = useState<CellPair[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [errorGame, setErrorGame] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
+  const [time, setTime] = useState(match.scheduled_time ?? "");
 
   useEffect(() => {
     const next: CellPair[] = [];
@@ -47,26 +42,11 @@ export default function MatchCard({
       next.push({ a: g ? String(g.score_a) : "", b: g ? String(g.score_b) : "" });
     }
     setCells(next);
+    setTime(match.scheduled_time ?? "");
   }, [match, cols]);
 
   const winnerId = match.winner_id;
   const retiredId = match.retired_player_id;
-
-  function rowClasses(id: number | null): string {
-    const base = "flex items-center gap-2 px-3 py-2";
-    if (id !== null && id === winnerId) return base + " font-semibold text-slate-900";
-    return base + " text-slate-600";
-  }
-
-  function scoreCellClass(side: "a" | "b", gameNumber: number): string {
-    const cell = cells[gameNumber - 1];
-    if (!cell) return "";
-    const a = Number(cell.a);
-    const b = Number(cell.b);
-    const isWinningSide = side === "a" ? a > b : b > a;
-    const highlight = match.status === "completed" && isWinningSide && cell.a !== "" && cell.b !== "";
-    return highlight ? "font-bold text-court" : "text-slate-500";
-  }
 
   async function save() {
     setSaving(true);
@@ -74,32 +54,29 @@ export default function MatchCard({
     setErrorGame(null);
     const games: Game[] = [];
     cells.forEach((c, i) => {
-      if (c.a !== "" && c.b !== "") {
+      if (c.a !== "" && c.b !== "")
         games.push({ game_number: i + 1, score_a: Number(c.a), score_b: Number(c.b) });
-      }
     });
     try {
-      await api.updateScore(category, match.id, games);
+      await api.updateScore(match.id, games);
       onChanged();
     } catch (e) {
       if (e instanceof ApiError && e.detail && typeof e.detail === "object") {
         const d = e.detail as { message?: string; game_number?: number };
         setError(d.message ?? "Invalid score.");
         setErrorGame(d.game_number ?? null);
-      } else {
-        setError(e instanceof Error ? e.message : "Failed to save.");
-      }
+      } else setError(e instanceof Error ? e.message : "Failed to save.");
     } finally {
       setSaving(false);
     }
   }
 
-  async function toggleRetire(playerId: number | null) {
-    if (playerId === null) return;
+  async function toggleRetire(pid: number | null) {
+    if (pid === null) return;
     setError(null);
     try {
-      if (retiredId === playerId) await api.unretire(category, match.id);
-      else await api.retire(category, match.id, playerId);
+      if (retiredId === pid) await api.unretire(match.id);
+      else await api.retire(match.id, pid);
       onChanged();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed.");
@@ -109,41 +86,87 @@ export default function MatchCard({
   async function reset() {
     setError(null);
     try {
-      await api.resetMatch(category, match.id);
+      await api.resetMatch(match.id);
       onChanged();
     } catch (e) {
-      if (e instanceof ApiError) setError(String(e.detail));
-      else setError("Failed to reset.");
+      setError(e instanceof ApiError ? String(e.detail) : "Failed to reset.");
     }
   }
 
+  async function toggleFlag(p: Player) {
+    try {
+      await api.flagPlayer(p.id, !p.flagged);
+      onChanged();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed.");
+    }
+  }
+
+  async function saveTime() {
+    try {
+      await api.setSchedule(match.id, time);
+      onChanged();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed.");
+    }
+  }
+
+  function scoreCellClass(side: "a" | "b", gameNumber: number): string {
+    const c = cells[gameNumber - 1];
+    if (!c) return "";
+    const a = Number(c.a);
+    const b = Number(c.b);
+    const winning = side === "a" ? a > b : b > a;
+    const hl = match.status === "completed" && winning && c.a !== "" && c.b !== "";
+    return hl ? "font-bold text-court" : "text-slate-500";
+  }
+
   const PlayerRow = ({ side, id }: { side: "a" | "b"; id: number | null }) => {
-    const branch = branchOf(players, id);
+    const p = id !== null ? players.get(id) ?? null : null;
     const isWinner = id !== null && id === winnerId;
     const isRetired = id !== null && id === retiredId;
     const isByeSlot = match.is_bye && id === null;
+    const tag = p ? expTag(p.experience_level) : null;
+    const selected = id !== null && selectedForSwap === id;
+
     return (
-      <div className={rowClasses(id)}>
-        {isWinner && <span className="w-2 h-2 rounded-full bg-court shrink-0" title="Winner" />}
-        {!isWinner && <span className="w-2 h-2 shrink-0" />}
+      <div
+        className={`flex items-start gap-2 px-2.5 py-1.5 ${isWinner ? "font-semibold text-slate-900" : "text-slate-600"} ${
+          selected ? "ring-2 ring-court rounded" : ""
+        }`}
+      >
+        <span className={`mt-1 w-2 h-2 rounded-full shrink-0 ${isWinner ? "bg-court" : ""}`} />
         <div className="min-w-0 flex-1">
-          <div className="truncate">
-            {isByeSlot ? <span className="text-slate-400 italic">Bye</span> : nameOf(players, id)}
+          <div className="flex items-center gap-1.5">
+            <button
+              disabled={!swapMode || p === null}
+              onClick={() => p && onSelectForSwap(p.id)}
+              className={`truncate text-left ${swapMode && p ? "hover:underline cursor-pointer" : "cursor-default"}`}
+              title={swapMode ? "Click to select for swap" : undefined}
+            >
+              {isByeSlot ? <span className="text-slate-400 italic">Bye</span> : p ? p.full_name : "TBD"}
+            </button>
+            {p?.flagged && <span title={p.flag_note ?? "Shortlisted"}>⭐</span>}
+            {p?.is_walkin && (
+              <span className="text-[9px] uppercase bg-purple-100 text-purple-700 px-1 rounded">spot</span>
+            )}
           </div>
-          {branch && <div className="text-[11px] text-slate-400 truncate">{branch}</div>}
+          <div className="flex items-center gap-1.5 mt-0.5">
+            {tag && <span className={`text-[9px] px-1 rounded ${tag.cls}`}>{tag.label}</span>}
+            {editable && p?.phone && <span className="text-[10px] text-slate-400">{p.phone}</span>}
+          </div>
         </div>
         {isRetired && (
-          <span className="text-[10px] font-semibold text-amber-700 bg-amber-100 px-1.5 py-0.5 rounded">
-            RET
-          </span>
+          <span className="text-[10px] font-semibold text-amber-700 bg-amber-100 px-1.5 py-0.5 rounded">RET</span>
         )}
         {match.is_bye && id === winnerId && (
-          <span className="text-[10px] font-semibold text-slate-600 bg-slate-100 px-1.5 py-0.5 rounded">
-            BYE
-          </span>
+          <span className="text-[10px] font-semibold text-slate-600 bg-slate-100 px-1.5 py-0.5 rounded">BYE</span>
         )}
-
-        {/* Score columns */}
+        {editable && p && (
+          <button onClick={() => toggleFlag(p)} title="Flag / shortlist" className="text-xs opacity-60 hover:opacity-100">
+            {p.flagged ? "★" : "☆"}
+          </button>
+        )}
         <div className="flex gap-1">
           {cells.map((c, i) =>
             editable && !match.is_bye ? (
@@ -153,22 +176,15 @@ export default function MatchCard({
                 value={side === "a" ? c.a : c.b}
                 onChange={(e) => {
                   const v = e.target.value.replace(/[^0-9]/g, "");
-                  setCells((prev) =>
-                    prev.map((p, idx) =>
-                      idx === i ? { ...p, [side]: v } : p,
-                    ) as CellPair[],
-                  );
+                  setCells((prev) => prev.map((pp, idx) => (idx === i ? { ...pp, [side]: v } : pp)) as CellPair[]);
                 }}
-                className={`w-9 text-center text-sm rounded border px-1 py-0.5 ${
+                className={`w-8 text-center text-sm rounded border px-0.5 py-0.5 ${
                   errorGame === i + 1 ? "border-red-400 bg-red-50" : "border-slate-200"
                 }`}
                 aria-label={`game ${i + 1} score`}
               />
             ) : (
-              <div
-                key={i}
-                className={`w-7 text-center text-sm tabular-nums ${scoreCellClass(side, i + 1)}`}
-              >
+              <div key={i} className={`w-7 text-center text-sm tabular-nums ${scoreCellClass(side, i + 1)}`}>
                 {side === "a" ? c.a : c.b}
               </div>
             ),
@@ -179,35 +195,45 @@ export default function MatchCard({
   };
 
   return (
-    <div
-      className={`bg-white rounded-lg border shadow-sm w-64 ${
-        match.status === "completed" ? "border-slate-200" : "border-slate-200"
-      }`}
-    >
+    <div className="bg-white rounded-lg border border-slate-200 shadow-sm w-72">
       <PlayerRow side="a" id={match.player_a_id} />
       <div className="border-t border-slate-100" />
       <PlayerRow side="b" id={match.player_b_id} />
 
+      {/* Schedule row */}
+      {(editable || match.scheduled_time) && !match.is_bye && (
+        <div className="border-t border-slate-100 px-2.5 py-1.5 flex items-center gap-2">
+          <span className="text-[10px] text-slate-400">🕑</span>
+          {editable ? (
+            <input
+              value={time}
+              onChange={(e) => setTime(e.target.value)}
+              onBlur={saveTime}
+              placeholder="e.g. Sat 10:30, Court 2"
+              className="flex-1 text-[11px] rounded border border-slate-200 px-1.5 py-0.5"
+            />
+          ) : (
+            <span className="text-[11px] text-slate-500">{match.scheduled_time}</span>
+          )}
+        </div>
+      )}
+
       {editable && !match.is_bye && (
         <div className="border-t border-slate-100 px-2 py-2 space-y-2">
-          {error && (
-            <div className="text-[11px] text-red-600 bg-red-50 rounded px-2 py-1">{error}</div>
-          )}
+          {error && <div className="text-[11px] text-red-600 bg-red-50 rounded px-2 py-1">{error}</div>}
           <div className="flex flex-wrap items-center gap-1.5">
             <button
               onClick={save}
               disabled={saving || match.player_a_id === null || match.player_b_id === null}
               className="text-xs bg-court text-white px-2 py-1 rounded disabled:opacity-40"
             >
-              {saving ? "Saving…" : "Save"}
+              {saving ? "…" : "Save"}
             </button>
             <button
               onClick={() => toggleRetire(match.player_a_id)}
               disabled={match.player_a_id === null}
               className={`text-xs px-2 py-1 rounded border ${
-                retiredId === match.player_a_id
-                  ? "bg-amber-100 border-amber-300 text-amber-800"
-                  : "border-slate-200 text-slate-600"
+                retiredId === match.player_a_id ? "bg-amber-100 border-amber-300 text-amber-800" : "border-slate-200 text-slate-600"
               }`}
             >
               RET A
@@ -216,18 +242,13 @@ export default function MatchCard({
               onClick={() => toggleRetire(match.player_b_id)}
               disabled={match.player_b_id === null}
               className={`text-xs px-2 py-1 rounded border ${
-                retiredId === match.player_b_id
-                  ? "bg-amber-100 border-amber-300 text-amber-800"
-                  : "border-slate-200 text-slate-600"
+                retiredId === match.player_b_id ? "bg-amber-100 border-amber-300 text-amber-800" : "border-slate-200 text-slate-600"
               }`}
             >
               RET B
             </button>
             {(match.status === "completed" || match.games.length > 0) && (
-              <button
-                onClick={reset}
-                className="text-xs px-2 py-1 rounded border border-slate-200 text-slate-500"
-              >
+              <button onClick={reset} className="text-xs px-2 py-1 rounded border border-slate-200 text-slate-500">
                 Reset
               </button>
             )}

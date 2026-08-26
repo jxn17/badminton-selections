@@ -8,25 +8,23 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     database_url: str = "postgresql+psycopg2://badminton:badminton@localhost:5432/badminton"
-    admin_emails: str = ""
     secret_key: str = "dev-insecure-secret-change-me"
 
-    google_client_id: str = ""
-    google_client_secret: str = ""
-    oauth_redirect_uri: str = "http://localhost:8000/api/auth/callback"
+    # Shared admin access code. Anyone with this code can log in as an admin and
+    # edit. Set a strong value in production.
+    admin_access_code: str = "trials2026"
+
     frontend_url: str = "http://localhost:5173"
 
-    # DEV ONLY: when true, /api/auth/dev-login logs in as the first ADMIN_EMAILS
-    # entry without Google. Never enable in production.
-    allow_dev_login: bool = False
-
     @property
-    def admin_email_list(self) -> list[str]:
-        return [e.strip().lower() for e in self.admin_emails.split(",") if e.strip()]
-
-    @property
-    def oauth_configured(self) -> bool:
-        return bool(self.google_client_id and self.google_client_secret)
+    def db_url(self) -> str:
+        """Normalize provider-style 'postgres://' to SQLAlchemy's 'postgresql+psycopg2://'."""
+        url = self.database_url
+        if url.startswith("postgres://"):
+            url = "postgresql+psycopg2://" + url[len("postgres://"):]
+        elif url.startswith("postgresql://") and "+psycopg2" not in url:
+            url = "postgresql+psycopg2://" + url[len("postgresql://"):]
+        return url
 
 
 @lru_cache

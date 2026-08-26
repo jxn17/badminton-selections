@@ -1,18 +1,15 @@
-"""CSV ingestion tests: normalization, dedup, validation, idempotency."""
+"""CSV ingestion tests for the Trials form format."""
 from __future__ import annotations
 
 import os
 
 import pytest
 
-from app.csv_import import classify_category, import_csv, normalize_phone, parse_and_dedup
+from app.csv_import import classify_gender, import_csv, normalize_phone, parse_and_dedup
 from app.models import Category, Player
 
-SAMPLE = os.path.join(
-    os.path.dirname(__file__), "..", "..", "sample_data", "entries_sample.csv"
-)
-
-HEADER = "Timestamp,Full Name,College Branch,Email,Phone Number,Played States or Nationals,Applying For"
+SAMPLE = os.path.join(os.path.dirname(__file__), "..", "..", "sample_data", "entries_sample.csv")
+HEADER = "Timestamp,Name,Gender,Phone Number,Registration Number,Year of Study (4th years not allowed),Level of Exprience"
 
 
 @pytest.mark.parametrize(
@@ -23,8 +20,8 @@ HEADER = "Timestamp,Full Name,College Branch,Email,Phone Number,Played States or
         ("09812345678", "9812345678"),
         ("91-98123-45678", "9812345678"),
         ("  9812345678  ", "9812345678"),
-        ("(981) 234-5678", "9812345678"),
-        ("12345", None),  # too short
+        ("+919515422428", "9515422428"),
+        ("12345", None),
         ("", None),
         (None, None),
     ],
@@ -33,84 +30,87 @@ def test_normalize_phone(raw, expected):
     assert normalize_phone(raw) == expected
 
 
-def test_classify_category():
-    assert classify_category("Men's Team") == Category.men
-    assert classify_category("women's team") == Category.women
-    assert classify_category(" WOMEN ") == Category.women
-    assert classify_category("Mixed Doubles") is None
+def test_classify_gender():
+    assert classify_gender("Male") == Category.men
+    assert classify_gender("female") == Category.women
+    assert classify_gender(" FEMALE ") == Category.women
+    assert classify_gender("Other") is None
 
 
 def _csv(*rows: str) -> str:
     return HEADER + "\n" + "\n".join(rows) + "\n"
 
 
-def test_dedup_across_formats():
+def test_dedup_same_phone_different_formats():
     content = _csv(
-        "2026/07/01 10:00:00,Alice,CS,a@x.edu,9800000000,None,Men's Team",
-        "2026/07/02 10:00:00,Alice Dup,CS,a2@x.edu,+91 9800000000,States,Men's Team",
-        "2026/07/03 10:00:00,Alice Dup2,CS,a3@x.edu,09800000000,Both,Men's Team",
+        "27/07/2026 10:00:00,Alice,Female,9800000000,261090050001,1st Year,School",
+        "28/07/2026 10:00:00,Alice Dup,Female,+91 9800000000,261090050001,1st Year,Casual",
+        "29/07/2026 10:00:00,Alice Dup2,Female,09800000000,261090050001,1st Year,School",
     )
     rows, report = parse_and_dedup(content)
     assert len(rows) == 1
     assert report.duplicates_dropped == 2
-    # Earliest timestamp kept.
-    assert rows[0].full_name == "Alice"
+    assert rows[0].full_name == "Alice"  # earliest timestamp kept
 
 
-def test_same_phone_different_category_kept_separately():
+def test_same_phone_across_gender_kept_separately():
     content = _csv(
-        "2026/07/01 10:00:00,Bob,CS,b@x.edu,9811111111,None,Men's Team",
-        "2026/07/01 10:00:00,Bobbie,CS,b2@x.edu,9811111111,None,Women's Team",
+        "27/07/2026 10:00:00,Bob,Male,9811111111,261090050002,1st Year,School",
+        "27/07/2026 10:00:00,Bobbie,Female,9811111111,261090050003,1st Year,School",
     )
     rows, report = parse_and_dedup(content)
     assert len(rows) == 2
     assert report.duplicates_dropped == 0
 
 
-def test_validation_skips():
+def test_short_phone_kept_via_registration_fallback():
+    # A too-short phone is not dropped; the registration number keys the entry.
     content = _csv(
-        "2026/07/01 10:00:00,,CS,noname@x.edu,9855555555,None,Men's Team",  # missing name
-        "2026/07/01 10:00:00,No Phone,CS,np@x.edu,,None,Men's Team",  # no phone
-        "2026/07/01 10:00:00,Confused,CS,c@x.edu,9822222222,None,Mixed",  # bad category
-        "2026/07/01 10:00:00,Good,CS,g@x.edu,9833333333,None,Women's Team",
+        "27/07/2026 10:00:00,No Phone,Male,,261090050099,1st Year,School",
     )
     rows, report = parse_and_dedup(content)
     assert len(rows) == 1
-    assert report.skipped_invalid == 3
-    reasons = " ".join(s.reason for s in report.skipped)
-    assert "phone" in reasons and "name" in reasons and "Applying For" in reasons
+    assert rows[0].dedup_key.startswith("reg:")
+    assert report.skipped_invalid == 0
+
+
+def test_bad_gender_and_missing_name_skipped():
+    content = _csv(
+        "27/07/2026 10:00:00,,Male,9822222222,261090050004,1st Year,School",  # missing name
+        "27/07/2026 10:00:00,Weird,Other,9833333333,261090050005,1st Year,School",  # bad gender
+        "27/07/2026 10:00:00,Good,Male,9844444444,261090050006,1st Year,School",
+    )
+    rows, report = parse_and_dedup(content)
+    assert len(rows) == 1
+    assert report.skipped_invalid == 2
 
 
 def test_whitespace_trimmed():
     content = _csv(
-        "2026/07/01 10:00:00, Spacey Name  ,  CS ,  s@x.edu ,  9844444444  , States , Men's Team ",
+        "27/07/2026 10:00:00, Spacey Name  , Male ,  9855555555 , 261090050007 , 1st Year , School ",
     )
     rows, _ = parse_and_dedup(content)
-    assert len(rows) == 1
     assert rows[0].full_name == "Spacey Name"
     assert rows[0].category == Category.men
-    assert rows[0].phone_normalized == "9844444444"
+    assert rows[0].phone_normalized == "9855555555"
 
 
-def test_import_is_idempotent(db):
+def test_import_idempotent(db):
     with open(SAMPLE, encoding="utf-8") as f:
         content = f.read()
-
     r1 = import_csv(db, content)
-    count1 = db.query(Player).count()
+    c1 = db.query(Player).count()
     r2 = import_csv(db, content)
-    count2 = db.query(Player).count()
-
-    assert count1 == count2  # re-import changes nothing
-    assert r1.imported == r2.imported
-    assert count1 == r1.imported
+    c2 = db.query(Player).count()
+    assert c1 == c2
+    assert r1.imported == r2.imported == c1
 
 
-def test_sample_has_expected_shape(db):
+def test_sample_shape(db):
     with open(SAMPLE, encoding="utf-8") as f:
         report = import_csv(db, f.read())
-    # 35 men + 28 women unique, plus the two whitespace-only new entrants (1 M, 1 W).
-    assert report.per_category_counts["men"] == 36
-    assert report.per_category_counts["women"] == 29
+    # 35 men + the whitespace man + the missing-phone man = 37; 20 women.
+    assert report.per_category_counts["men"] == 37
+    assert report.per_category_counts["women"] == 20
     assert report.duplicates_dropped == 3
-    assert report.skipped_invalid == 3
+    assert report.skipped_invalid == 1  # the 'Other' gender row

@@ -106,6 +106,7 @@ def _make_players(db, n, category=Category.men):
             full_name=f"P{i}",
             phone_raw=str(9000000000 + i),
             phone_normalized=str(9000000000 + i),
+            dedup_key=f"ph:{9000000000 + i}",
             category=category,
         )
         db.add(p)

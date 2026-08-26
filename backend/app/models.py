@@ -1,8 +1,8 @@
 """SQLAlchemy ORM models.
 
-Two independent tournaments (men / women) run in parallel. Everything is scoped
-by `category`. See the module docstrings in draw.py and scoring.py for the logic
-that operates over these tables.
+Two categories (men / women), derived from the form's Gender field. Men are
+split into four balanced groups (A–D); women run as a single draw. Each group is
+its own `Tournament` row with its own bracket.
 """
 from __future__ import annotations
 
@@ -48,33 +48,48 @@ def _utcnow() -> dt.datetime:
 
 class Player(Base):
     __tablename__ = "players"
-    # A person is unique per category by their normalized phone. The same human
-    # could (but shouldn't) enter both draws, so men/women are independent.
+    # Identity is the normalized phone per category (a person shouldn't be in both
+    # men's and women's). Walk-ins added on the spot may share nothing, so the
+    # importer/creator supplies a stable key.
     __table_args__ = (
-        UniqueConstraint("phone_normalized", "category", name="uq_player_phone_category"),
+        UniqueConstraint("dedup_key", "category", name="uq_player_dedup_category"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     full_name: Mapped[str] = mapped_column(String(200), nullable=False)
-    college_branch: Mapped[str | None] = mapped_column(String(200))
-    email: Mapped[str | None] = mapped_column(String(200))
-    phone_raw: Mapped[str] = mapped_column(String(50), nullable=False)
-    phone_normalized: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
-    states_nationals: Mapped[str | None] = mapped_column(String(50))
+    phone_raw: Mapped[str | None] = mapped_column(String(50))
+    phone_normalized: Mapped[str | None] = mapped_column(String(20), index=True)
+    dedup_key: Mapped[str] = mapped_column(String(120), nullable=False)
+
+    registration_number: Mapped[str | None] = mapped_column(String(60))
+    year_of_study: Mapped[str | None] = mapped_column(String(40))
+    experience_level: Mapped[str | None] = mapped_column(String(60))
+
     category: Mapped[Category] = mapped_column(Enum(Category), nullable=False, index=True)
-    entry_timestamp: Mapped[str | None] = mapped_column(String(64))  # raw form timestamp, for tie-break
+    # Men: 'A'..'D' once grouped. Women: null (single draw).
+    group_label: Mapped[str | None] = mapped_column(String(4), index=True)
+
+    is_walkin: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    flagged: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    flag_note: Mapped[str | None] = mapped_column(String(300))
+
+    entry_timestamp: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
 
 class Tournament(Base):
     __tablename__ = "tournaments"
+    __table_args__ = (
+        UniqueConstraint("category", "group_label", name="uq_tournament_category_group"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    category: Mapped[Category] = mapped_column(Enum(Category), nullable=False, unique=True)
+    category: Mapped[Category] = mapped_column(Enum(Category), nullable=False, index=True)
+    group_label: Mapped[str | None] = mapped_column(String(4))  # 'A'..'D' for men; null for women
     status: Mapped[TournamentStatus] = mapped_column(
         Enum(TournamentStatus), default=TournamentStatus.draft, nullable=False
     )
-    draw_seed: Mapped[int | None] = mapped_column(Integer)  # RNG seed used, for reproducibility
+    draw_seed: Mapped[int | None] = mapped_column(Integer)
     bracket_size: Mapped[int | None] = mapped_column(Integer)
     num_byes: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
@@ -95,8 +110,8 @@ class Match(Base):
     tournament_id: Mapped[int] = mapped_column(
         ForeignKey("tournaments.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    round_number: Mapped[int] = mapped_column(Integer, nullable=False)  # 1 = first round
-    position_in_round: Mapped[int] = mapped_column(Integer, nullable=False)  # 0-based
+    round_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    position_in_round: Mapped[int] = mapped_column(Integer, nullable=False)
 
     player_a_id: Mapped[int | None] = mapped_column(ForeignKey("players.id"))
     player_b_id: Mapped[int | None] = mapped_column(ForeignKey("players.id"))
@@ -104,11 +119,12 @@ class Match(Base):
     winner_id: Mapped[int | None] = mapped_column(ForeignKey("players.id"))
     retired_player_id: Mapped[int | None] = mapped_column(ForeignKey("players.id"))
 
-    # Advancement wiring: winner of this match flows into next_match_id.
     next_match_id: Mapped[int | None] = mapped_column(ForeignKey("matches.id"))
     status: Mapped[MatchStatus] = mapped_column(
         Enum(MatchStatus), default=MatchStatus.pending, nullable=False
     )
+    # Free-text schedule set by admins, e.g. "Sat 10:30, Court 2".
+    scheduled_time: Mapped[str | None] = mapped_column(String(120))
 
     tournament: Mapped[Tournament] = relationship(back_populates="matches")
     player_a: Mapped[Player | None] = relationship(foreign_keys=[player_a_id])
@@ -126,7 +142,7 @@ class Game(Base):
     match_id: Mapped[int] = mapped_column(
         ForeignKey("matches.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    game_number: Mapped[int] = mapped_column(Integer, nullable=False)  # 1-based
+    game_number: Mapped[int] = mapped_column(Integer, nullable=False)
     score_a: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     score_b: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
@@ -145,29 +161,20 @@ class RoundFormat(Base):
     tournament_id: Mapped[int] = mapped_column(
         ForeignKey("tournaments.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    round_number: Mapped[int | None] = mapped_column(Integer)  # NULL = default
-    points_to_win: Mapped[int] = mapped_column(Integer, nullable=False, default=15)
+    round_number: Mapped[int | None] = mapped_column(Integer)
+    points_to_win: Mapped[int] = mapped_column(Integer, nullable=False, default=21)
     win_by_two: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    hard_cap: Mapped[int | None] = mapped_column(Integer)  # NULL = no cap
+    hard_cap: Mapped[int | None] = mapped_column(Integer)
     games_to_win_match: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
 
     tournament: Mapped[Tournament] = relationship(back_populates="formats")
-
-
-class Admin(Base):
-    __tablename__ = "admins"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    email: Mapped[str] = mapped_column(String(200), unique=True, nullable=False)
-    added_by: Mapped[str | None] = mapped_column(String(200))
-    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
 
 class AuditLog(Base):
     __tablename__ = "audit_log"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    admin_email: Mapped[str] = mapped_column(String(200), nullable=False)
+    admin_email: Mapped[str] = mapped_column(String(200), nullable=False)  # admin's name/initials
     action: Mapped[str] = mapped_column(String(100), nullable=False)
     entity: Mapped[str] = mapped_column(String(100), nullable=False)
     entity_id: Mapped[int | None] = mapped_column(Integer)

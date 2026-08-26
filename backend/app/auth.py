@@ -1,50 +1,38 @@
-"""Admin auth: Google OAuth login + session cookie + whitelist enforcement.
+"""Admin auth via a shared access code.
 
-Public read endpoints never call these dependencies. Every mutating endpoint
-depends on `require_admin`, so authorization is enforced server-side — the
-frontend is never trusted.
+Anyone with the code logs in as an admin and may edit. Each admin also supplies
+a display name (for audit attribution). Public read endpoints never call these;
+every mutating endpoint depends on `require_admin`, enforced server-side.
 """
 from __future__ import annotations
 
-from fastapi import Depends, HTTPException, Request, status
-from sqlalchemy.orm import Session
+import hmac
+
+from fastapi import HTTPException, Request, status
 
 from .config import get_settings
-from .database import get_db
-from .models import Admin
 
 settings = get_settings()
 
-SESSION_EMAIL_KEY = "admin_email"
+SESSION_ADMIN_KEY = "is_admin"
+SESSION_NAME_KEY = "admin_name"
 
 
-def is_whitelisted(db: Session, email: str) -> bool:
-    email = (email or "").strip().lower()
-    if not email:
+def code_is_valid(code: str) -> bool:
+    expected = settings.admin_access_code or ""
+    if not expected:
         return False
-    if email in settings.admin_email_list:
-        return True
-    return db.query(Admin).filter(Admin.email == email).one_or_none() is not None
+    return hmac.compare_digest((code or "").strip(), expected)
 
 
-def ensure_bootstrap_admins(db: Session) -> None:
-    """Seed the whitelist from ADMIN_EMAILS so the first admins can log in."""
-    for email in settings.admin_email_list:
-        existing = db.query(Admin).filter(Admin.email == email).one_or_none()
-        if existing is None:
-            db.add(Admin(email=email, added_by="ADMIN_EMAILS env"))
-    db.commit()
+def current_admin_name(request: Request) -> str | None:
+    if request.session.get(SESSION_ADMIN_KEY):
+        return request.session.get(SESSION_NAME_KEY) or "admin"
+    return None
 
 
-def current_admin_email(request: Request) -> str | None:
-    return request.session.get(SESSION_EMAIL_KEY)
-
-
-def require_admin(request: Request, db: Session = Depends(get_db)) -> str:
-    """Dependency for all mutating endpoints. Returns the admin email or 401/403."""
-    email = current_admin_email(request)
-    if not email:
+def require_admin(request: Request) -> str:
+    """Dependency for all mutating endpoints. Returns the admin's display name."""
+    if not request.session.get(SESSION_ADMIN_KEY):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Admin login required.")
-    if not is_whitelisted(db, email):
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Email is not an authorized admin.")
-    return email
+    return request.session.get(SESSION_NAME_KEY) or "admin"

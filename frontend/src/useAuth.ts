@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, Me } from "./api";
+import { Me, api } from "./api";
 
 export function useAuth() {
   const [me, setMe] = useState<Me | null>(null);
@@ -9,7 +9,7 @@ export function useAuth() {
     try {
       setMe(await api.me());
     } catch {
-      setMe({ authenticated: false, email: null, is_admin: false });
+      setMe({ is_admin: false, name: null });
     } finally {
       setLoading(false);
     }
@@ -19,10 +19,18 @@ export function useAuth() {
     refresh();
   }, [refresh]);
 
+  const login = useCallback(
+    async (code: string, name: string) => {
+      await api.codeLogin(code, name);
+      await refresh();
+    },
+    [refresh],
+  );
+
   const logout = useCallback(async () => {
     await api.logout();
     await refresh();
   }, [refresh]);
 
-  return { me, loading, refresh, logout, isAdmin: !!me?.is_admin };
+  return { me, loading, refresh, login, logout, isAdmin: !!me?.is_admin, name: me?.name ?? null };
 }

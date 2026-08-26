@@ -1,11 +1,12 @@
-"""Generate sample_data/entries_sample.csv (deterministic).
+"""Generate sample_data/entries_sample.csv (deterministic, FAKE data).
 
-Mirrors a Google Form -> Sheet export and deliberately embeds the messy cases
-that exercise the ingestion pipeline:
-  * duplicate phone numbers written in different formats
-  * some numbers with +91, some with a leading 0
-  * one row missing a phone number
-  * a couple of rows with trailing whitespace
+Mirrors the Trials Google Form export and embeds the messy cases the pipeline
+must survive: duplicate form-fills (same phone, different formats), +91 / leading
+0 numbers, a missing phone (kept via reg-number fallback), an unrecognized
+gender (skipped), and trailing whitespace.
+
+The REAL entries file is never committed (it contains students' phone numbers);
+this fake sample is what the tests and demo use.
 
 Run:  python sample_data/generate_sample.py
 """
@@ -16,15 +17,15 @@ import os
 
 HEADERS = [
     "Timestamp",
-    "Full Name",
-    "College Branch",
-    "Email",
+    "Name",
+    "Gender",
     "Phone Number",
-    "Played States or Nationals",
-    "Applying For",
+    "Registration Number",
+    "Year of Study (4th years not allowed)",
+    "Level of Exprience",  # matches the form's real (misspelled) header
 ]
 
-MEN_NAMES = [
+MEN = [
     "Aarav Sharma", "Vivaan Gupta", "Aditya Nair", "Vihaan Reddy", "Arjun Mehta",
     "Sai Krishnan", "Reyansh Iyer", "Krishna Rao", "Ishaan Verma", "Rohan Das",
     "Kabir Chauhan", "Ayaan Khan", "Dhruv Patel", "Ansh Malhotra", "Yuvraj Singh",
@@ -33,78 +34,56 @@ MEN_NAMES = [
     "Veer Saxena", "Devansh Kapoor", "Aarush Ghosh", "Nakul Naidu", "Tejas Banerjee",
     "Harsh Vardhan", "Manav Trivedi", "Rishab Shetty", "Yash Deshmukh", "Karan Dubey",
 ]
-
-WOMEN_NAMES = [
+WOMEN = [
     "Aadhya Sharma", "Ananya Gupta", "Diya Nair", "Ira Reddy", "Myra Mehta",
     "Anika Krishnan", "Saanvi Iyer", "Kiara Rao", "Aarohi Verma", "Riya Das",
     "Navya Chauhan", "Prisha Khan", "Sara Patel", "Avni Malhotra", "Meera Singh",
     "Ishita Bose", "Zara Joseph", "Tara Kulkarni", "Kavya Menon", "Anvi Pillai",
-    "Pari Sinha", "Nithya Jain", "Siya Bhat", "Riddhi Agarwal", "Aria Chaudhary",
-    "Mahi Saxena", "Trisha Kapoor", "Niharika Ghosh",
 ]
-
-BRANCHES = [
-    "Computer Science", "Mechanical", "Electronics", "Civil", "Electrical",
-    "Information Tech", "Chemical", "Biotech", "Aerospace", "Metallurgy",
+LEVELS = [
+    "Nationals or States", "District or Local Tournaments", "School",
+    "Casual", "No experience or Beginner",
 ]
+YEARS = ["1st Year", "2nd Year", "3rd Year"]
 
 
 def phone(i: int) -> str:
-    # Base 10-digit number, unique per index.
     return f"9{800000000 + i * 137 % 199999999:09d}"[:10]
+
+
+def reg(i: int) -> str:
+    return f"2610900{50000 + i:05d}"
 
 
 def main() -> None:
     rows: list[list[str]] = []
-    ts = 1  # a simple increasing "timestamp" so dedup tie-breaks are testable
+    ts = 1
 
-    def add(name, branch, email, ph, level, team):
+    def add(name, gender, ph, r, year, level):
         nonlocal ts
-        stamp = f"2026/07/{(ts % 27) + 1:02d} 10:{ts % 60:02d}:00"
-        rows.append([stamp, name, branch, email, ph, level, team])
+        stamp = f"{(ts % 27) + 1:02d}/08/2026 10:{ts % 60:02d}:00"
+        rows.append([stamp, name, gender, ph, r, year, level])
         ts += 1
 
-    levels = ["None", "States", "Nationals", "Both"]
+    for i, name in enumerate(MEN):
+        add(name, "Male", phone(i), reg(i), YEARS[i % 3], LEVELS[i % len(LEVELS)])
+    for i, name in enumerate(WOMEN):
+        add(name, "Female", phone(100 + i), reg(100 + i), YEARS[i % 3], LEVELS[i % len(LEVELS)])
 
-    # ---- Men ----
-    for i, name in enumerate(MEN_NAMES):
-        branch = BRANCHES[i % len(BRANCHES)]
-        email = name.lower().replace(" ", ".") + "@college.edu"
-        add(name, branch, email, phone(i), levels[i % 4], "Men's Team")
+    # ---- Messy cases ----
+    add(MEN[0], "Male", "+91 " + phone(0), reg(0), "1st Year", LEVELS[2])  # dup of men[0]
+    add(MEN[1], "Male", "0" + phone(1), reg(1), "1st Year", LEVELS[0])      # dup of men[1]
+    add(WOMEN[0], "Female", f"{phone(100)[:5]}-{phone(100)[5:]}", reg(100), "1st Year", LEVELS[1])  # dup
+    add("Rahul Nanda  ", " Male ", "  " + phone(60) + " ", reg(60), " 1st Year ", " Casual ")  # whitespace, new
+    add("No Phone Guy", "Male", "", reg(70), "1st Year", "School")  # missing phone -> reg fallback keeps
+    add("Confused Entry", "Other", phone(80), reg(80), "1st Year", "Casual")  # bad gender -> skipped
 
-    # ---- Women ----
-    for i, name in enumerate(WOMEN_NAMES):
-        branch = BRANCHES[i % len(BRANCHES)]
-        email = name.lower().replace(" ", ".") + "@college.edu"
-        add(name, branch, email, phone(100 + i), levels[i % 4], "Women's Team")
-
-    # ---- Deliberate messy cases (appended so they collide with earlier rows) ----
-    # Same person as men[0], phone with +91 -> duplicate, later timestamp (dropped).
-    add(MEN_NAMES[0], BRANCHES[0], "dupe1@college.edu", "+91 " + phone(0), "States", "Men's Team")
-    # Same as men[1], phone with leading 0 -> duplicate.
-    add(MEN_NAMES[1], BRANCHES[1], "dupe2@college.edu", "0" + phone(1), "None", "Men's Team")
-    # Same as women[0], phone with spaces/hyphens -> duplicate.
-    add(WOMEN_NAMES[0], BRANCHES[0], "dupe3@college.edu",
-        f"{phone(100)[:5]}-{phone(100)[5:]}", "Both", "Women's Team")
-    # Trailing whitespace everywhere (new valid man).
-    add("Rahul Nanda  ", "  Computer Science ", " rahul.nanda@college.edu ",
-        "  " + phone(60) + " ", " States ", " Men's Team ")
-    # Trailing whitespace (new valid woman).
-    add("Sneha Rao  ", "Civil ", "sneha.rao@college.edu ", phone(160) + "  ",
-        "Nationals", "Women's Team ")
-    # Missing phone -> skipped.
-    add("No Phone Guy", "Mechanical", "nophone@college.edu", "", "None", "Men's Team")
-    # Unrecognized "Applying For" -> skipped.
-    add("Confused Entry", "Civil", "confused@college.edu", phone(70), "None", "Mixed Doubles")
-    # Missing name -> skipped.
-    add("", "Electrical", "noname@college.edu", phone(80), "States", "Men's Team")
-
-    out_path = os.path.join(os.path.dirname(__file__), "entries_sample.csv")
-    with open(out_path, "w", newline="", encoding="utf-8") as f:
+    out = os.path.join(os.path.dirname(__file__), "entries_sample.csv")
+    with open(out, "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
         w.writerow(HEADERS)
         w.writerows(rows)
-    print(f"Wrote {len(rows)} rows to {out_path}")
+    print(f"Wrote {len(rows)} rows to {out}")
 
 
 if __name__ == "__main__":

@@ -1,5 +1,7 @@
-"""Admin (write) endpoints. Every route depends on `require_admin` and audits."""
+"""Admin (write) endpoints. Every route requires the shared access-code session."""
 from __future__ import annotations
+
+import datetime as dt
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from sqlalchemy.orm import Session
@@ -8,241 +10,240 @@ from ..audit import match_snapshot, record
 from ..auth import require_admin
 from ..csv_import import import_csv
 from ..database import get_db
-from ..draw import generate_draw
-from ..models import (
-    Admin,
-    Category,
-    Match,
-    MatchStatus,
-    RoundFormat,
-    Tournament,
-    TournamentStatus,
+from ..models import Category, Match, MatchStatus, Player, RoundFormat, Tournament, TournamentStatus
+from ..scoring import (
+    GameInput,
+    ScoringError,
+    apply_scores,
+    clear_retirement,
+    set_retirement,
 )
-from ..scoring import GameInput, ScoringError, apply_scores, clear_retirement, set_retirement
+from ..service import add_walkin, rebuild_men, rebuild_women, swap_players
 from ..schemas import (
-    AdminIn,
+    FlagIn,
     GenerateDrawIn,
     RetireIn,
     RoundFormatIn,
     RoundFormatOut,
+    ScheduleIn,
     ScoreUpdateIn,
+    SwapIn,
+    WalkinIn,
 )
 
 router = APIRouter(prefix="/api/admin", tags=["admin"], dependencies=[Depends(require_admin)])
 
 
-def _parse_category(value: str) -> Category:
-    try:
-        return Category(value)
-    except ValueError:
-        raise HTTPException(404, "Category must be 'men' or 'women'.") from None
+def _match(db: Session, match_id: int) -> Match:
+    m = db.get(Match, match_id)
+    if m is None:
+        raise HTTPException(404, "Match not found.")
+    return m
 
 
-def _get_or_create_tournament(db: Session, cat: Category) -> Tournament:
-    t = db.query(Tournament).filter(Tournament.category == cat).one_or_none()
+def _tournament(db: Session, tournament_id: int) -> Tournament:
+    t = db.get(Tournament, tournament_id)
     if t is None:
-        t = Tournament(category=cat, status=TournamentStatus.draft)
-        db.add(t)
-        db.flush()
-        # Seed a sensible default format: single game to 15, win-by-two, no cap.
-        db.add(
-            RoundFormat(
-                tournament_id=t.id,
-                round_number=None,
-                points_to_win=15,
-                win_by_two=True,
-                hard_cap=None,
-                games_to_win_match=1,
-            )
-        )
-        db.flush()
+        raise HTTPException(404, "Tournament not found.")
     return t
 
 
+def _scoring_error(exc: ScoringError):
+    raise HTTPException(422, detail={"message": exc.message, "game_number": exc.game_number})
+
+
 # --------------------------------------------------------------------------
-# CSV import
+# Import + draw building
 # --------------------------------------------------------------------------
 @router.post("/import")
 async def import_entries(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
-    admin_email: str = Depends(require_admin),
+    admin: str = Depends(require_admin),
 ):
     raw = await file.read()
     try:
-        content = raw.decode("utf-8-sig")  # tolerate a BOM from Excel/Sheets exports
+        content = raw.decode("utf-8-sig")
     except UnicodeDecodeError:
         content = raw.decode("latin-1")
     report = import_csv(db, content)
-    record(db, admin_email, "import_csv", "players", None, after=report.as_dict())
+    record(db, admin, "import_csv", "players", None, after=report.as_dict())
     db.commit()
     return report.as_dict()
 
 
-# --------------------------------------------------------------------------
-# Draw generation / lock
-# --------------------------------------------------------------------------
-@router.post("/{category}/draw")
-def make_draw(
-    category: str,
-    body: GenerateDrawIn,
-    db: Session = Depends(get_db),
-    admin_email: str = Depends(require_admin),
-):
-    cat = _parse_category(category)
-    t = _get_or_create_tournament(db, cat)
-    if t.status != TournamentStatus.draft:
-        raise HTTPException(409, "Draw is locked; regeneration is only allowed while draft.")
+@router.post("/men/rebuild")
+def build_men(body: GenerateDrawIn, db: Session = Depends(get_db), admin: str = Depends(require_admin)):
     try:
-        generate_draw(db, t, seed=body.seed)
+        result = rebuild_men(db, seed=body.seed)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
-    record(
-        db, admin_email, "generate_draw", "tournament", t.id,
-        after={"seed": t.draw_seed, "bracket_size": t.bracket_size, "num_byes": t.num_byes},
-    )
+    record(db, admin, "rebuild_men", "tournament", None, after=result)
     db.commit()
-    return {"seed": t.draw_seed, "bracket_size": t.bracket_size, "num_byes": t.num_byes}
+    return result
 
 
-@router.post("/{category}/lock")
-def lock_draw(
-    category: str,
-    db: Session = Depends(get_db),
-    admin_email: str = Depends(require_admin),
-):
-    cat = _parse_category(category)
-    t = db.query(Tournament).filter(Tournament.category == cat).one_or_none()
-    if t is None or not t.matches:
-        raise HTTPException(400, "Generate a draw before locking.")
+@router.post("/women/rebuild")
+def build_women(body: GenerateDrawIn, db: Session = Depends(get_db), admin: str = Depends(require_admin)):
+    try:
+        result = rebuild_women(db, seed=body.seed)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    record(db, admin, "rebuild_women", "tournament", None, after=result)
+    db.commit()
+    return result
+
+
+@router.post("/tournaments/{tournament_id}/lock")
+def lock(tournament_id: int, db: Session = Depends(get_db), admin: str = Depends(require_admin)):
+    t = _tournament(db, tournament_id)
+    if not t.matches:
+        raise HTTPException(400, "Generate the draw before locking.")
     if t.status != TournamentStatus.draft:
-        raise HTTPException(409, "Tournament is already locked.")
-    import datetime as dt
-
+        raise HTTPException(409, "Already locked.")
     t.status = TournamentStatus.locked
     t.locked_at = dt.datetime.now(dt.timezone.utc)
-    record(db, admin_email, "lock_draw", "tournament", t.id, after={"status": "locked"})
+    record(db, admin, "lock", "tournament", t.id, after={"status": "locked"})
+    db.commit()
+    return {"status": t.status.value}
+
+
+@router.post("/tournaments/{tournament_id}/unlock")
+def unlock(tournament_id: int, db: Session = Depends(get_db), admin: str = Depends(require_admin)):
+    t = _tournament(db, tournament_id)
+    t.status = TournamentStatus.draft
+    t.locked_at = None
+    record(db, admin, "unlock", "tournament", t.id, after={"status": "draft"})
     db.commit()
     return {"status": t.status.value}
 
 
 # --------------------------------------------------------------------------
-# Scoring
+# Scoring / match edits
 # --------------------------------------------------------------------------
-def _load_match(db: Session, category: str, match_id: int) -> Match:
-    cat = _parse_category(category)
-    t = db.query(Tournament).filter(Tournament.category == cat).one_or_none()
-    match = db.get(Match, match_id)
-    if match is None or t is None or match.tournament_id != t.id:
-        raise HTTPException(404, "Match not found in this category.")
-    return match
-
-
-@router.put("/{category}/matches/{match_id}/score")
-def update_score(
-    category: str,
-    match_id: int,
-    body: ScoreUpdateIn,
-    db: Session = Depends(get_db),
-    admin_email: str = Depends(require_admin),
-):
-    match = _load_match(db, category, match_id)
-    before = match_snapshot(match)
+@router.put("/matches/{match_id}/score")
+def update_score(match_id: int, body: ScoreUpdateIn, db: Session = Depends(get_db), admin: str = Depends(require_admin)):
+    m = _match(db, match_id)
+    before = match_snapshot(m)
     games = [GameInput(g.game_number, g.score_a, g.score_b) for g in body.games]
     try:
-        apply_scores(db, match, games, admin_email)
+        apply_scores(db, m, games, admin)
     except ScoringError as exc:
-        raise HTTPException(422, detail={"message": exc.message, "game_number": exc.game_number})
-    record(db, admin_email, "score_edit", "match", match.id, before, match_snapshot(match))
+        _scoring_error(exc)
+    record(db, admin, "score_edit", "match", m.id, before, match_snapshot(m))
     db.commit()
-    return match_snapshot(match)
+    return match_snapshot(m)
 
 
-@router.post("/{category}/matches/{match_id}/retire")
-def retire(
-    category: str,
-    match_id: int,
-    body: RetireIn,
-    db: Session = Depends(get_db),
-    admin_email: str = Depends(require_admin),
-):
-    match = _load_match(db, category, match_id)
-    before = match_snapshot(match)
+@router.post("/matches/{match_id}/retire")
+def retire(match_id: int, body: RetireIn, db: Session = Depends(get_db), admin: str = Depends(require_admin)):
+    m = _match(db, match_id)
+    before = match_snapshot(m)
     try:
-        set_retirement(db, match, body.retired_player_id, admin_email)
+        set_retirement(db, m, body.retired_player_id, admin)
     except ScoringError as exc:
-        raise HTTPException(422, detail={"message": exc.message, "game_number": exc.game_number})
-    record(db, admin_email, "retire", "match", match.id, before, match_snapshot(match))
+        _scoring_error(exc)
+    record(db, admin, "retire", "match", m.id, before, match_snapshot(m))
     db.commit()
-    return match_snapshot(match)
+    return match_snapshot(m)
 
 
-@router.delete("/{category}/matches/{match_id}/retire")
-def unretire(
-    category: str,
-    match_id: int,
-    db: Session = Depends(get_db),
-    admin_email: str = Depends(require_admin),
-):
-    match = _load_match(db, category, match_id)
-    before = match_snapshot(match)
+@router.delete("/matches/{match_id}/retire")
+def unretire(match_id: int, db: Session = Depends(get_db), admin: str = Depends(require_admin)):
+    m = _match(db, match_id)
+    before = match_snapshot(m)
     try:
-        clear_retirement(db, match, admin_email)
+        clear_retirement(db, m, admin)
     except ScoringError as exc:
-        raise HTTPException(422, detail={"message": exc.message, "game_number": exc.game_number})
-    record(db, admin_email, "clear_retire", "match", match.id, before, match_snapshot(match))
+        _scoring_error(exc)
+    record(db, admin, "clear_retire", "match", m.id, before, match_snapshot(m))
     db.commit()
-    return match_snapshot(match)
+    return match_snapshot(m)
 
 
-@router.post("/{category}/matches/{match_id}/reset")
-def reset_match(
-    category: str,
-    match_id: int,
-    db: Session = Depends(get_db),
-    admin_email: str = Depends(require_admin),
-):
-    """Clear a match's result so an upstream correction can re-advance into it.
-
-    Only allowed when this match itself has no *started* downstream match beyond
-    it; it removes games, winner and RET, and withdraws its advanced player.
-    """
-    match = _load_match(db, category, match_id)
-    before = match_snapshot(match)
-
-    # Withdraw whatever this match pushed downstream, if that match hasn't started.
-    if match.next_match_id is not None:
-        nxt = db.get(Match, match.next_match_id)
-        if nxt is not None and (
-            nxt.status != MatchStatus.pending or nxt.winner_id is not None or nxt.games
-        ):
-            raise HTTPException(
-                409, "The next-round match has started. Reset that one first."
-            )
+@router.post("/matches/{match_id}/reset")
+def reset_match(match_id: int, db: Session = Depends(get_db), admin: str = Depends(require_admin)):
+    m = _match(db, match_id)
+    before = match_snapshot(m)
+    if m.next_match_id is not None:
+        nxt = db.get(Match, m.next_match_id)
+        if nxt is not None and (nxt.status != MatchStatus.pending or nxt.winner_id is not None or nxt.games):
+            raise HTTPException(409, "The next-round match has started. Reset that one first.")
         if nxt is not None:
-            if match.position_in_round % 2 == 0:
+            if m.position_in_round % 2 == 0:
                 nxt.player_a_id = None
             else:
                 nxt.player_b_id = None
-
-    for g in list(match.games):
+    for g in list(m.games):
         db.delete(g)
-    match.winner_id = None
-    match.retired_player_id = None
-    match.status = MatchStatus.pending
-    record(db, admin_email, "reset_match", "match", match.id, before, match_snapshot(match))
+    m.winner_id = None
+    m.retired_player_id = None
+    m.status = MatchStatus.pending
+    record(db, admin, "reset_match", "match", m.id, before, match_snapshot(m))
     db.commit()
-    return match_snapshot(match)
+    return match_snapshot(m)
+
+
+@router.put("/matches/{match_id}/schedule")
+def set_schedule(match_id: int, body: ScheduleIn, db: Session = Depends(get_db), admin: str = Depends(require_admin)):
+    m = _match(db, match_id)
+    before = {"scheduled_time": m.scheduled_time}
+    m.scheduled_time = (body.scheduled_time or "").strip() or None
+    record(db, admin, "schedule", "match", m.id, before, {"scheduled_time": m.scheduled_time})
+    db.commit()
+    return {"id": m.id, "scheduled_time": m.scheduled_time}
 
 
 # --------------------------------------------------------------------------
-# Scoring formats
+# Roster: flag/shortlist, swap, walk-ins
 # --------------------------------------------------------------------------
-@router.get("/{category}/formats", response_model=list[RoundFormatOut])
-def list_formats(category: str, db: Session = Depends(get_db)):
-    cat = _parse_category(category)
-    t = _get_or_create_tournament(db, cat)
+@router.post("/players/{player_id}/flag")
+def flag_player(player_id: int, body: FlagIn, db: Session = Depends(get_db), admin: str = Depends(require_admin)):
+    p = db.get(Player, player_id)
+    if p is None:
+        raise HTTPException(404, "Player not found.")
+    before = {"flagged": p.flagged, "flag_note": p.flag_note}
+    p.flagged = body.flagged
+    p.flag_note = (body.note or "").strip() or None
+    record(db, admin, "flag_player", "player", p.id, before, {"flagged": p.flagged, "flag_note": p.flag_note})
     db.commit()
+    return {"id": p.id, "flagged": p.flagged, "flag_note": p.flag_note}
+
+
+@router.post("/tournaments/{tournament_id}/swap")
+def swap(tournament_id: int, body: SwapIn, db: Session = Depends(get_db), admin: str = Depends(require_admin)):
+    t = _tournament(db, tournament_id)
+    try:
+        swap_players(db, t, body.player_x_id, body.player_y_id)
+    except ScoringError as exc:
+        _scoring_error(exc)
+    record(db, admin, "swap_players", "tournament", t.id,
+           after={"x": body.player_x_id, "y": body.player_y_id})
+    db.commit()
+    return {"ok": True}
+
+
+@router.post("/walkin/{category}")
+def walkin_cat(category: str, body: WalkinIn, db: Session = Depends(get_db), admin: str = Depends(require_admin)):
+    try:
+        cat = Category(category)
+    except ValueError:
+        raise HTTPException(404, "Category must be 'men' or 'women'.") from None
+    try:
+        result = add_walkin(db, cat, body.name, body.phone, body.experience, body.group_label)
+    except ScoringError as exc:
+        _scoring_error(exc)
+    record(db, admin, "add_walkin", "player", result["player_id"], after=result)
+    db.commit()
+    return result
+
+
+# --------------------------------------------------------------------------
+# Scoring formats (per tournament/group)
+# --------------------------------------------------------------------------
+@router.get("/tournaments/{tournament_id}/formats", response_model=list[RoundFormatOut])
+def list_formats(tournament_id: int, db: Session = Depends(get_db)):
+    t = _tournament(db, tournament_id)
     return (
         db.query(RoundFormat)
         .filter(RoundFormat.tournament_id == t.id)
@@ -251,60 +252,40 @@ def list_formats(category: str, db: Session = Depends(get_db)):
     )
 
 
-@router.put("/{category}/formats", response_model=RoundFormatOut)
-def upsert_format(
-    category: str,
-    body: RoundFormatIn,
-    db: Session = Depends(get_db),
-    admin_email: str = Depends(require_admin),
-):
-    cat = _parse_category(category)
-    t = _get_or_create_tournament(db, cat)
+@router.put("/tournaments/{tournament_id}/formats", response_model=RoundFormatOut)
+def upsert_format(tournament_id: int, body: RoundFormatIn, db: Session = Depends(get_db), admin: str = Depends(require_admin)):
+    t = _tournament(db, tournament_id)
     if body.points_to_win < 1:
         raise HTTPException(422, "points_to_win must be >= 1.")
     if body.hard_cap is not None and body.hard_cap < body.points_to_win:
         raise HTTPException(422, "hard_cap must be >= points_to_win.")
     if body.games_to_win_match < 1:
         raise HTTPException(422, "games_to_win_match must be >= 1.")
-
     fmt = (
         db.query(RoundFormat)
         .filter(
             RoundFormat.tournament_id == t.id,
-            RoundFormat.round_number.is_(body.round_number)
-            if body.round_number is None
+            RoundFormat.round_number.is_(None) if body.round_number is None
             else RoundFormat.round_number == body.round_number,
         )
         .one_or_none()
     )
-    before = None
     if fmt is None:
         fmt = RoundFormat(tournament_id=t.id, round_number=body.round_number)
         db.add(fmt)
-    else:
-        before = {"points_to_win": fmt.points_to_win, "win_by_two": fmt.win_by_two}
     fmt.points_to_win = body.points_to_win
     fmt.win_by_two = body.win_by_two
     fmt.hard_cap = body.hard_cap
     fmt.games_to_win_match = body.games_to_win_match
     db.flush()
-    record(db, admin_email, "set_format", "round_format", fmt.id, before,
-           {"round_number": fmt.round_number, "points_to_win": fmt.points_to_win})
+    record(db, admin, "set_format", "round_format", fmt.id, after={"round": fmt.round_number, "ptw": fmt.points_to_win})
     db.commit()
     return fmt
 
 
-@router.delete("/{category}/formats/{round_number}")
-def delete_format_override(
-    category: str,
-    round_number: int,
-    db: Session = Depends(get_db),
-    admin_email: str = Depends(require_admin),
-):
-    cat = _parse_category(category)
-    t = db.query(Tournament).filter(Tournament.category == cat).one_or_none()
-    if t is None:
-        raise HTTPException(404, "No tournament for this category.")
+@router.delete("/tournaments/{tournament_id}/formats/{round_number}")
+def delete_format(tournament_id: int, round_number: int, db: Session = Depends(get_db), admin: str = Depends(require_admin)):
+    t = _tournament(db, tournament_id)
     fmt = (
         db.query(RoundFormat)
         .filter(RoundFormat.tournament_id == t.id, RoundFormat.round_number == round_number)
@@ -313,74 +294,20 @@ def delete_format_override(
     if fmt is None:
         raise HTTPException(404, "No override for that round.")
     db.delete(fmt)
-    record(db, admin_email, "delete_format", "round_format", fmt.id)
+    record(db, admin, "delete_format", "round_format", fmt.id)
     db.commit()
     return {"ok": True}
-
-
-# --------------------------------------------------------------------------
-# Admin whitelist management
-# --------------------------------------------------------------------------
-@router.get("/admins")
-def list_admins(db: Session = Depends(get_db)):
-    return [
-        {"id": a.id, "email": a.email, "added_by": a.added_by}
-        for a in db.query(Admin).order_by(Admin.email).all()
-    ]
-
-
-@router.post("/admins")
-def add_admin(
-    body: AdminIn,
-    db: Session = Depends(get_db),
-    admin_email: str = Depends(require_admin),
-):
-    email = body.email.strip().lower()
-    if not email:
-        raise HTTPException(422, "Email required.")
-    if db.query(Admin).filter(Admin.email == email).one_or_none():
-        raise HTTPException(409, "Already an admin.")
-    admin = Admin(email=email, added_by=admin_email)
-    db.add(admin)
-    record(db, admin_email, "add_admin", "admin", None, after={"email": email})
-    db.commit()
-    return {"id": admin.id, "email": admin.email}
 
 
 @router.get("/audit")
-def list_audit(limit: int = 100, db: Session = Depends(get_db)):
+def list_audit(limit: int = 150, db: Session = Depends(get_db)):
     from ..models import AuditLog
 
-    rows = (
-        db.query(AuditLog).order_by(AuditLog.timestamp.desc(), AuditLog.id.desc()).limit(limit).all()
-    )
+    rows = db.query(AuditLog).order_by(AuditLog.timestamp.desc(), AuditLog.id.desc()).limit(limit).all()
     return [
         {
-            "id": r.id,
-            "admin_email": r.admin_email,
-            "action": r.action,
-            "entity": r.entity,
-            "entity_id": r.entity_id,
-            "before_json": r.before_json,
-            "after_json": r.after_json,
-            "timestamp": r.timestamp.isoformat() if r.timestamp else None,
+            "id": r.id, "admin": r.admin_email, "action": r.action, "entity": r.entity,
+            "entity_id": r.entity_id, "timestamp": r.timestamp.isoformat() if r.timestamp else None,
         }
         for r in rows
     ]
-
-
-@router.delete("/admins/{admin_id}")
-def remove_admin(
-    admin_id: int,
-    db: Session = Depends(get_db),
-    admin_email: str = Depends(require_admin),
-):
-    admin = db.get(Admin, admin_id)
-    if admin is None:
-        raise HTTPException(404, "Admin not found.")
-    if admin.email == admin_email:
-        raise HTTPException(400, "You cannot remove yourself.")
-    record(db, admin_email, "remove_admin", "admin", admin.id, before={"email": admin.email})
-    db.delete(admin)
-    db.commit()
-    return {"ok": True}

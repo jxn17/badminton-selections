@@ -1,8 +1,8 @@
-"""CSV ingestion: parse -> validate -> normalize -> dedup -> idempotent upsert.
+"""CSV ingestion for the Trials form: parse -> validate -> dedup -> upsert.
 
-Re-importing the same file changes nothing (upsert keyed on normalized phone,
-scoped per category). Every bad row is collected into a report rather than
-crashing the import.
+Form columns: Timestamp, Name, Gender, Phone Number, Registration Number,
+Year of Study, Level of Experience. Category comes from Gender. Idempotent:
+re-importing the same file changes nothing.
 """
 from __future__ import annotations
 
@@ -15,21 +15,17 @@ from sqlalchemy.orm import Session
 
 from .models import Category, Player
 
-# ---- Header matching -------------------------------------------------------
-# We match on header *names* (case/space tolerant), not column index, so extra
-# columns or reordering in the Google Sheet export won't break the parser.
+# Header matching is name-based (case/space/typo tolerant), not positional.
 HEADER_ALIASES: dict[str, list[str]] = {
     "timestamp": ["timestamp"],
-    "full_name": ["full name", "name"],
-    "college_branch": ["college branch", "college / branch", "branch", "college"],
-    "email": ["email", "email address", "e-mail"],
-    "phone": ["phone number", "phone", "mobile", "mobile number"],
-    "states_nationals": ["played states or nationals", "states or nationals", "level"],
-    "applying_for": ["applying for", "team", "category"],
+    "name": ["name", "full name"],
+    "gender": ["gender", "sex"],
+    "phone": ["phone number", "phone", "mobile", "mobile number", "contact"],
+    "registration": ["registration number", "registration no", "reg no", "reg number", "registration"],
+    "year": ["year of study (4th years not allowed)", "year of study", "year"],
+    # note the form's real header misspells "Experience" as "Exprience"
+    "experience": ["level of exprience", "level of experience", "experience", "level"],
 }
-
-_APPLYING_MEN = {"men's team", "mens team", "men", "male", "boys"}
-_APPLYING_WOMEN = {"women's team", "womens team", "women", "female", "girls"}
 
 
 def _norm_header(h: str) -> str:
@@ -37,7 +33,6 @@ def _norm_header(h: str) -> str:
 
 
 def _build_header_map(fieldnames: list[str]) -> dict[str, str]:
-    """Map our canonical keys -> the actual header string present in the file."""
     normalized = {_norm_header(h): h for h in fieldnames if h is not None}
     mapping: dict[str, str] = {}
     for key, aliases in HEADER_ALIASES.items():
@@ -48,17 +43,13 @@ def _build_header_map(fieldnames: list[str]) -> dict[str, str]:
     return mapping
 
 
-def normalize_phone(raw: str) -> str | None:
-    """Canonical dedup key: digits only, drop +91 / 91 / leading 0, last 10 digits.
-
-    Returns None if fewer than 10 digits remain (treated as missing/invalid).
-    """
-    if raw is None:
+def normalize_phone(raw: str | None) -> str | None:
+    """Digits only, drop +91/91/leading 0, keep last 10. None if <10 remain."""
+    if not raw:
         return None
     digits = re.sub(r"\D", "", raw)
     if not digits:
         return None
-    # Strip common India country-code / trunk prefixes.
     if digits.startswith("91") and len(digits) > 10:
         digits = digits[2:]
     digits = digits.lstrip("0")
@@ -67,13 +58,23 @@ def normalize_phone(raw: str) -> str | None:
     return digits[-10:]
 
 
-def classify_category(applying_for: str) -> Category | None:
-    v = _norm_header(applying_for)
-    if v in _APPLYING_MEN:
+def classify_gender(value: str) -> Category | None:
+    v = _norm_header(value)
+    if v in {"male", "m", "boy", "men", "man"}:
         return Category.men
-    if v in _APPLYING_WOMEN:
+    if v in {"female", "f", "girl", "women", "woman"}:
         return Category.women
     return None
+
+
+def dedup_key_for(phone_norm: str | None, registration: str, name: str) -> str:
+    """Stable identity: phone if valid, else reg number digits, else lowercased name."""
+    if phone_norm:
+        return f"ph:{phone_norm}"
+    reg = re.sub(r"\D", "", registration or "")
+    if len(reg) >= 6:
+        return f"reg:{reg}"
+    return f"nm:{_norm_header(name)}"
 
 
 @dataclass
@@ -87,7 +88,7 @@ class SkippedRow:
 class DroppedDuplicate:
     row_number: int
     kept_row_number: int
-    phone_normalized: str
+    key: str
     category: str
     name: str
 
@@ -108,14 +109,13 @@ class ImportReport:
             "skipped_invalid": self.skipped_invalid,
             "per_category_counts": self.per_category_counts,
             "skipped": [
-                {"row_number": s.row_number, "reason": s.reason, "raw": s.raw}
-                for s in self.skipped
+                {"row_number": s.row_number, "reason": s.reason, "raw": s.raw} for s in self.skipped
             ],
             "dropped_duplicates": [
                 {
                     "row_number": d.row_number,
                     "kept_row_number": d.kept_row_number,
-                    "phone_normalized": d.phone_normalized,
+                    "key": d.key,
                     "category": d.category,
                     "name": d.name,
                 }
@@ -125,24 +125,20 @@ class ImportReport:
 
 
 @dataclass
-class _ParsedRow:
+class ParsedRow:
     row_number: int
     full_name: str
-    college_branch: str
-    email: str
     phone_raw: str
-    phone_normalized: str
-    states_nationals: str
+    phone_normalized: str | None
+    dedup_key: str
+    registration_number: str
+    year_of_study: str
+    experience_level: str
     category: Category
     timestamp: str
 
 
-def parse_and_dedup(content: str) -> tuple[list[_ParsedRow], ImportReport]:
-    """Pure function: parse + validate + dedup. No DB access, so it is unit-testable.
-
-    Dedup keeps the earliest Timestamp on collision (falls back to earliest row
-    order when timestamps are missing/unparseable), scoped per (category, phone).
-    """
+def parse_and_dedup(content: str) -> tuple[list[ParsedRow], ImportReport]:
     report = ImportReport()
     reader = csv.DictReader(io.StringIO(content))
     if not reader.fieldnames:
@@ -151,63 +147,50 @@ def parse_and_dedup(content: str) -> tuple[list[_ParsedRow], ImportReport]:
 
     def cell(row: dict, key: str) -> str:
         col = hmap.get(key)
-        if col is None:
-            return ""
-        return (row.get(col) or "").strip()
+        return (row.get(col) or "").strip() if col else ""
 
-    accepted: dict[tuple[str, str], _ParsedRow] = {}
+    accepted: dict[tuple[str, str], ParsedRow] = {}
 
-    # Header row is line 1; DictReader's first data row is spreadsheet row 2.
     for idx, row in enumerate(reader, start=2):
-        raw_snapshot = {k: (v or "").strip() for k, v in row.items() if k}
-        name = cell(row, "full_name")
+        snapshot = {k: (v or "").strip() for k, v in row.items() if k}
+        name = cell(row, "name")
+        gender = cell(row, "gender")
         phone_raw = cell(row, "phone")
-        applying = cell(row, "applying_for")
 
         if not name:
-            report.skipped.append(SkippedRow(idx, "missing name", raw_snapshot))
+            report.skipped.append(SkippedRow(idx, "missing name", snapshot))
             continue
-        category = classify_category(applying)
+        category = classify_gender(gender)
         if category is None:
-            report.skipped.append(
-                SkippedRow(idx, f"unrecognized Applying For: {applying!r}", raw_snapshot)
-            )
-            continue
-        phone_norm = normalize_phone(phone_raw)
-        if phone_norm is None:
-            report.skipped.append(SkippedRow(idx, "missing/invalid phone", raw_snapshot))
+            report.skipped.append(SkippedRow(idx, f"unrecognized gender: {gender!r}", snapshot))
             continue
 
-        parsed = _ParsedRow(
+        phone_norm = normalize_phone(phone_raw)
+        registration = cell(row, "registration")
+        key = dedup_key_for(phone_norm, registration, name)
+
+        parsed = ParsedRow(
             row_number=idx,
-            full_name=name,
-            college_branch=cell(row, "college_branch"),
-            email=cell(row, "email"),
+            full_name=re.sub(r"\s+", " ", name).strip(),
             phone_raw=phone_raw,
             phone_normalized=phone_norm,
-            states_nationals=cell(row, "states_nationals"),
+            dedup_key=key,
+            registration_number=registration,
+            year_of_study=cell(row, "year"),
+            experience_level=cell(row, "experience"),
             category=category,
             timestamp=cell(row, "timestamp"),
         )
 
-        key = (category.value, phone_norm)
-        existing = accepted.get(key)
+        ck = (category.value, key)
+        existing = accepted.get(ck)
         if existing is None:
-            accepted[key] = parsed
+            accepted[ck] = parsed
             continue
-
-        # Collision: keep the earliest timestamp (string compare works for ISO
-        # and Google's "YYYY/MM/DD HH:MM:SS"; on ties keep the earlier row).
         keep, drop = _pick_earliest(existing, parsed)
-        accepted[key] = keep
+        accepted[ck] = keep
         report.dropped_duplicates.append(
-            DroppedDuplicate(
-                row_number=drop.row_number,
-                kept_row_number=keep.row_number,
-                phone_normalized=phone_norm,
-                category=category.value,
-                name=drop.full_name,
-            )
+            DroppedDuplicate(drop.row_number, keep.row_number, key, category.value, drop.full_name)
         )
 
     report.skipped_invalid = len(report.skipped)
@@ -215,48 +198,56 @@ def parse_and_dedup(content: str) -> tuple[list[_ParsedRow], ImportReport]:
     return list(accepted.values()), report
 
 
-def _pick_earliest(a: _ParsedRow, b: _ParsedRow) -> tuple[_ParsedRow, _ParsedRow]:
-    """Return (keep, drop) preferring the earliest timestamp, then earliest row."""
-    ta, tb = a.timestamp or "", b.timestamp or ""
+def _pick_earliest(a: ParsedRow, b: ParsedRow) -> tuple[ParsedRow, ParsedRow]:
+    ta, tb = _ts(a.timestamp), _ts(b.timestamp)
     if ta and tb and ta != tb:
         return (a, b) if ta < tb else (b, a)
-    # Missing/equal timestamps: earliest row number wins.
     return (a, b) if a.row_number <= b.row_number else (b, a)
 
 
+def _ts(s: str) -> tuple | None:
+    """Parse 'DD/MM/YYYY HH:MM:SS' into a sortable tuple; None if unparseable."""
+    m = re.match(r"(\d{2})/(\d{2})/(\d{4})\s+(\d{2}):(\d{2}):(\d{2})", s or "")
+    if not m:
+        return None
+    d, mo, y, h, mi, se = (int(x) for x in m.groups())
+    return (y, mo, d, h, mi, se)
+
+
 def import_csv(db: Session, content: str) -> ImportReport:
-    """Full pipeline against the DB. Idempotent: upsert keyed on (category, phone)."""
+    """Full pipeline. Idempotent upsert keyed on (category, dedup_key).
+
+    Existing group assignments and walk-in flags are preserved on re-import.
+    """
     parsed_rows, report = parse_and_dedup(content)
 
     for pr in parsed_rows:
         existing = (
             db.query(Player)
-            .filter(
-                Player.phone_normalized == pr.phone_normalized,
-                Player.category == pr.category,
-            )
+            .filter(Player.dedup_key == pr.dedup_key, Player.category == pr.category)
             .one_or_none()
         )
         if existing is None:
             db.add(
                 Player(
                     full_name=pr.full_name,
-                    college_branch=pr.college_branch or None,
-                    email=pr.email or None,
-                    phone_raw=pr.phone_raw,
+                    phone_raw=pr.phone_raw or None,
                     phone_normalized=pr.phone_normalized,
-                    states_nationals=pr.states_nationals or None,
+                    dedup_key=pr.dedup_key,
+                    registration_number=pr.registration_number or None,
+                    year_of_study=pr.year_of_study or None,
+                    experience_level=pr.experience_level or None,
                     category=pr.category,
                     entry_timestamp=pr.timestamp or None,
                 )
             )
         else:
-            # Idempotent refresh of mutable fields; the identity key is unchanged.
             existing.full_name = pr.full_name
-            existing.college_branch = pr.college_branch or None
-            existing.email = pr.email or None
-            existing.phone_raw = pr.phone_raw
-            existing.states_nationals = pr.states_nationals or None
+            existing.phone_raw = pr.phone_raw or None
+            existing.phone_normalized = pr.phone_normalized
+            existing.registration_number = pr.registration_number or None
+            existing.year_of_study = pr.year_of_study or None
+            existing.experience_level = pr.experience_level or None
             existing.entry_timestamp = pr.timestamp or None
         report.per_category_counts[pr.category.value] += 1
 

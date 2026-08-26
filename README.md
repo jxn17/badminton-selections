@@ -1,42 +1,65 @@
-# College Badminton Team Selection — Draws & Scoring
+# Badminton Trials 2026 — Draws & Scoring
 
-A BWF-style single-elimination draw and live-scoring system for college team
-selection. Two independent tournaments run in parallel — **Men's** and
-**Women's**. Public pages are read-only and need no login; admins sign in with
-Google to import entries, generate/lock draws, and enter scores directly on the
-bracket cards.
+Selection-trial draw and live-scoring tool. Entrants come from a Google Form
+(category is taken from the **Gender** field). Men are split into **four balanced
+groups (A–D)**, women run as a single **128-draw**. Public pages are read-only;
+admins sign in with a **shared access code** to import, build draws, enter scores,
+schedule matches, flag shortlist players, swap players, and add walk-ins.
 
 - **Frontend:** React 18 + TypeScript + Tailwind + Vite
-- **Backend:** FastAPI + SQLAlchemy 2 + Alembic + Pydantic v2
-- **Database:** PostgreSQL (via Docker or a managed `DATABASE_URL`)
-- **Admin auth:** Google OAuth with an email whitelist
+- **Backend:** FastAPI + SQLAlchemy 2 + Pydantic v2
+- **Database:** PostgreSQL
+- **Deploy:** single-origin (FastAPI serves the built SPA) — one Railway service + Postgres
 
 ```
-.
-├── backend/         FastAPI app, models, draw engine, scoring, tests
-├── frontend/        React SPA (public bracket + admin console)
-├── sample_data/     entries_sample.csv + its generator
-├── docker-compose.yml
-└── README.md
+backend/    FastAPI app, draw + grouping + scoring engines, tests
+frontend/   React SPA (group navbar, editable bracket cards, admin toolbar)
+sample_data/  FAKE sample CSV + generator (the real entrant file is never committed)
+Dockerfile  all-in-one image (builds frontend, served by FastAPI) — used by Railway
+docker-compose.yml  local all-in-one (app + Postgres)
 ```
 
 ---
 
-## Quick start (Docker)
+## What it does
 
-Spins up Postgres + the API. The frontend runs separately with Vite (below).
+- **Dedup:** re-submissions are merged (normalized phone per category; falls back to
+  registration number, then name, so nobody with a bad phone is lost). Idempotent import.
+- **Fair groups:** the 227 men are snake-drafted into A–D by strength tier, so
+  Nationals/States and District players are spread evenly — no stacked group.
+- **Editable bracket cards:** admins type scores inline; the winner advances live.
+  Re-editing a decided match safely re-advances (or blocks if the next match started).
+- **RET**, **match scheduling** (free-text time/court per card), **flag/shortlist**
+  (⭐ a player so they're kept even if they lose a good match), **swap players**
+  (rebalance who-plays-whom before matches start), and **walk-ins** (add a spot
+  entry; auto-slotted into an open bye).
+- **Phone numbers** show to signed-in admins only — never on the public page.
+- **Multi-admin:** the shared code lets several organizers edit at once; the bracket
+  auto-refreshes every 15s so they see each other's updates. Each admin enters a
+  name that's recorded in the audit log with every change.
 
+---
+
+## Run locally
+
+### Option A — all-in-one with Docker (mirrors production)
 ```bash
-# from repo root
 docker compose up --build
 ```
+Open <http://localhost:8000>. Set a code first if you like:
+`ADMIN_ACCESS_CODE=mycode docker compose up --build`.
 
-The API comes up on <http://localhost:8000> (health check at `/api/health`) and
-runs Alembic migrations on boot. Set admin/OAuth env vars first (see below) —
-e.g. `ADMIN_EMAILS=you@gmail.com docker compose up`.
-
-Then start the frontend:
-
+### Option B — dev servers (hot reload)
+Backend (needs a Postgres, or use SQLite for a quick spin):
+```bash
+cd backend
+python -m venv .venv && .venv/Scripts/activate     # macOS/Linux: source .venv/bin/activate
+pip install -r requirements.txt
+DATABASE_URL=sqlite:///./trials.db ADMIN_ACCESS_CODE=trials2026 SECRET_KEY=dev \
+  uvicorn app.main:app --reload --port 8000
+python seed.py     # optional: load the fake sample + build draws
+```
+Frontend:
 ```bash
 cd frontend
 npm install
@@ -45,145 +68,36 @@ npm run dev        # http://localhost:5173  (proxies /api -> :8000)
 
 ---
 
-## Local start (no Docker)
+## Deploy to Railway (single service + Postgres)
 
-### 1. Postgres
+1. Push this repo to GitHub (already done).
+2. In Railway: **New Project → Deploy from GitHub repo** → pick this repo. It
+   detects the root `Dockerfile` (builds the frontend and serves it from FastAPI).
+3. **Add a database:** New → **Database → PostgreSQL**.
+4. On the app service, set **Variables**:
+   | Variable | Value |
+   | --- | --- |
+   | `DATABASE_URL` | `${{Postgres.DATABASE_URL}}` (reference the Postgres service) |
+   | `ADMIN_ACCESS_CODE` | a strong shared code you give organizers |
+   | `SECRET_KEY` | a long random string |
+   | `FRONTEND_URL` | the app's own public https URL (Railway gives you one) |
+5. Deploy. Open the public URL. Click **Admin login**, enter your name + the code,
+   then **Import CSV** → **Rebuild men** → **Rebuild women**.
 
-Either run just the DB from compose:
-
-```bash
-docker compose up db
-```
-
-…or point `DATABASE_URL` at any Postgres you already have.
-
-### 2. Backend
-
-```bash
-cd backend
-python -m venv .venv
-# Windows:  .venv\Scripts\activate     (or use .venv/Scripts/python.exe directly)
-# macOS/Linux:  source .venv/bin/activate
-pip install -r requirements.txt
-
-cp .env.example .env        # then edit values
-alembic upgrade head        # create the schema
-uvicorn app.main:app --reload --port 8000
-```
-
-### 3. Frontend
-
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-Open <http://localhost:5173>.
+`healthcheckPath` is `/api/health` (see `railway.json`). Schema is created on boot.
 
 ---
 
-## Environment variables
+## Importing entries
 
-Set these for the backend (via `.env`, or the shell / compose environment):
+Admin → **Import CSV**. The parser matches on header names (case/space/typo
+tolerant) and expects: `Timestamp, Name, Gender, Phone Number, Registration
+Number, Year of Study, Level of Experience`. Category comes from **Gender**
+(Male → men, Female → women). Re-importing the same file changes nothing.
 
-| Variable | Purpose |
-| --- | --- |
-| `DATABASE_URL` | SQLAlchemy URL, e.g. `postgresql+psycopg2://badminton:badminton@localhost:5432/badminton`. Point at a managed instance in production. |
-| `ADMIN_EMAILS` | Comma-separated Google emails seeded into the admin whitelist on boot (bootstraps the first admins). |
-| `SECRET_KEY` | Signs the admin session cookie — use a long random string. |
-| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | OAuth 2.0 Web client from the [Google Cloud console](https://console.cloud.google.com/apis/credentials). |
-| `OAUTH_REDIRECT_URI` | Must match the console config, e.g. `http://localhost:8000/api/auth/callback`. |
-| `FRONTEND_URL` | Frontend origin for CORS + post-login redirect (`http://localhost:5173`). |
-| `ALLOW_DEV_LOGIN` | **Dev only.** `true` enables `/api/auth/dev-login`, which signs in as the first `ADMIN_EMAILS` entry without Google. Keep `false` in production. |
-
-### Setting up Google OAuth
-
-1. In Google Cloud → *APIs & Services → Credentials*, create an **OAuth client
-   ID** of type *Web application*.
-2. Add an authorized redirect URI matching `OAUTH_REDIRECT_URI`
-   (e.g. `http://localhost:8000/api/auth/callback`).
-3. Put the client id/secret into the backend env.
-4. Add your Google address to `ADMIN_EMAILS`. Only whitelisted emails can reach
-   any mutating endpoint — enforced server-side, never trusting the frontend.
-
----
-
-## Importing entries from the Google Form
-
-Entries come from a Google Form → Sheet. Export the sheet to CSV, then upload it
-on the **Admin → Import entries** page (or `POST /api/admin/import`).
-
-The parser matches on **header names** (case/whitespace tolerant), not column
-order, and expects: `Timestamp`, `Full Name`, `College Branch`, `Email`,
-`Phone Number`, `Played States or Nationals`, `Applying For`
-(`Men's Team` / `Women's Team`).
-
-The pipeline is **idempotent** — re-importing the same file changes nothing:
-
-1. Every field is trimmed.
-2. Rows with no name, no phone, or an unrecognized `Applying For` are collected
-   into a **skipped** report (never crash).
-3. Phone is normalized for dedup: digits only, drop a leading `+91`/`91`/`0`,
-   keep the last 10 digits. Both raw and normalized are stored.
-4. Deduplicated by normalized phone **per category** (men/women independent);
-   on a collision the **earliest `Timestamp`** wins and the drop is logged.
-5. Upsert keyed on normalized phone, returning
-   `{ imported, duplicates_dropped, skipped_invalid, per_category_counts }`.
-
-A ready sample lives at [`sample_data/entries_sample.csv`](sample_data/entries_sample.csv)
-(~36 men, ~29 women, plus deliberate duplicates in mixed formats, `+91`/leading-`0`
-numbers, a missing phone, an unrecognized category, and trailing-whitespace rows).
-Regenerate it with `python sample_data/generate_sample.py`.
-
-### Seed a demo database
-
-```bash
-cd backend
-python seed.py                # import sample + generate both draws
-python seed.py --with-scores  # also play a few Round-1 results
-```
-
----
-
-## Generating & locking a draw
-
-From **Admin → Generate & lock the draw** (or `POST /api/admin/{category}/draw`):
-
-- `N` players → bracket size `P` = smallest power of two ≥ `N`, with `B = P − N`
-  byes. Because `P` is the *smallest* such power, `B < P/2`, so **no bye is ever
-  paired against another bye** (proven in code + tests).
-- Players are shuffled with **Fisher–Yates** using a stored RNG **seed** — same
-  seed + same players reproduces the exact draw (auditable). You can supply a
-  seed or let one be generated and recorded.
-- Byes are placed on the standard top-seed slot positions so they spread evenly;
-  which players sit next to a bye is decided purely by the shuffle.
-- The full bracket (Round 1 → Final) is created and wired for advancement; bye
-  winners advance immediately.
-
-**Regenerate** is allowed only while the tournament is `draft`. **Lock** freezes
-the structure (you're warned first); after locking, only scores/winners change.
-
----
-
-## Scoring (format-driven — nothing is hardcoded)
-
-Scoring rules come from the editable **Scoring Settings** panel, stored per
-tournament as a default (applies to all rounds) plus optional per-round
-overrides. Each format sets `points_to_win`, `win_by_two`, `hard_cap`, and
-`games_to_win_match` (1 = single game; higher supports best-of-N). Default:
-single game to **15**, win-by-two, no cap.
-
-On the bracket, an admin types scores straight into the game column(s) on each
-card. The server validates against the resolved format (rejects a sub-target
-winning score, enforces win-by-two / hard cap, flags impossible scores inline),
-sets the winner, and advances them live into the next match. A player can be
-flagged **RET** (opponent advances regardless, partial score preserved). Editing
-a decided match correctly withdraws and re-pushes the winner; if the next match
-has already started, the edit is blocked with a clear message (reset that match
-first). Every score edit, winner change and RET writes to the **audit log**.
-
-Public visitors see the same cards read-only — and **never** any email or phone.
+After importing, click **Rebuild men (A–D)** and **Rebuild women**. `sample_data/`
+holds a FAKE sample used by tests and demos; the real entrant file (with phone
+numbers) is git-ignored and never committed.
 
 ---
 
@@ -191,28 +105,9 @@ Public visitors see the same cards read-only — and **never** any email or phon
 
 ```bash
 cd backend
-.venv/Scripts/python.exe -m pytest      # Windows
-# or:  pytest
+.venv/Scripts/python.exe -m pytest      # 65 tests; SQLite, no Postgres needed
 ```
-
-Covers phone normalization, dedup/validation, import idempotency, and the draw
-engine for `N ∈ {2,3,5,6,7,8,13,16,17,31,32}` (correct `P`/`B`, no bye-vs-bye,
-every player placed once, valid advancement chaining), plus format-driven
-scoring, advancement, RET, and safe re-advancement. The tests use SQLite, so no
-Postgres is needed to run them.
-
----
-
-## API surface (summary)
-
-Public (no auth): `GET /api/categories/{men|women}/bracket`,
-`GET /api/categories/{cat}/players`, `GET /api/health`, `GET /api/auth/me`.
-
-Admin (session required): `POST /api/admin/import`,
-`POST /api/admin/{cat}/draw`, `POST /api/admin/{cat}/lock`,
-`PUT /api/admin/{cat}/matches/{id}/score`,
-`POST|DELETE /api/admin/{cat}/matches/{id}/retire`,
-`POST /api/admin/{cat}/matches/{id}/reset`,
-`GET|PUT /api/admin/{cat}/formats`, `DELETE /api/admin/{cat}/formats/{round}`,
-`GET|POST /api/admin/admins`, `DELETE /api/admin/admins/{id}`,
-`GET /api/admin/audit`.
+Covers phone normalization, dedup/validation/idempotency, the draw engine for
+`N ∈ {2,3,5,6,7,8,13,16,17,31,32}` (correct bracket size/byes, no bye-vs-bye,
+every player placed once, valid advancement), and format-driven scoring, RET,
+and safe re-advancement.

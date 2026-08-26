@@ -56,7 +56,8 @@ def _setup(db, n=8, seed=1):
         db.add(
             Player(
                 full_name=f"P{i}", phone_raw=str(9000000000 + i),
-                phone_normalized=str(9000000000 + i), category=Category.men,
+                phone_normalized=str(9000000000 + i), dedup_key=f"ph:{9000000000 + i}",
+                category=Category.men,
             )
         )
     t = Tournament(category=Category.men, status=TournamentStatus.draft)

@@ -196,16 +196,19 @@ def generate_draw(db: Session, tournament: Tournament, seed: int | None = None) 
     Wipes any existing matches, builds a fresh plan, writes Match rows, and wires
     next_match_id. Stores bracket_size, num_byes and draw_seed for auditability.
     """
-    players = (
-        db.query(Player)
-        .filter(Player.category == tournament.category)
-        .order_by(Player.id)
-        .all()
-    )
+    # Players for THIS tournament: category + its group (women have group_label=None).
+    q = db.query(Player).filter(Player.category == tournament.category)
+    if tournament.group_label is None:
+        q = q.filter(Player.group_label.is_(None))
+    else:
+        q = q.filter(Player.group_label == tournament.group_label)
+    players = q.order_by(Player.id).all()
     player_ids = [p.id for p in players]
     if len(player_ids) < 2:
+        label = tournament.group_label or "(all)"
         raise ValueError(
-            f"Cannot draw {tournament.category.value}: need >= 2 players, have {len(player_ids)}."
+            f"Cannot draw {tournament.category.value} group {label}: "
+            f"need >= 2 players, have {len(player_ids)}."
         )
 
     if seed is None:

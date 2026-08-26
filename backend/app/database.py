@@ -10,10 +10,10 @@ settings = get_settings()
 
 # For SQLite (used by the test suite) we need check_same_thread=False.
 connect_args = {}
-if settings.database_url.startswith("sqlite"):
+if settings.db_url.startswith("sqlite"):
     connect_args = {"check_same_thread": False}
 
-engine = create_engine(settings.database_url, connect_args=connect_args, future=True)
+engine = create_engine(settings.db_url, connect_args=connect_args, future=True)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
 
 

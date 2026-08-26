@@ -6,8 +6,7 @@ services:
       POSTGRES_PASSWORD: badminton
       POSTGRES_DB: badminton
     ports:
-      # Host port is configurable to avoid clashing with a local Postgres on 5432.
-      # e.g. DB_HOST_PORT=5433 docker compose up
+      # Host port configurable to avoid clashing with a local Postgres on 5432.
       - "${DB_HOST_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
@@ -17,20 +16,21 @@ services:
       timeout: 3s
       retries: 10
 
-  backend:
-    build: ./backend
+  # Local all-in-one (API + built frontend) using the root Dockerfile — mirrors
+  # the Railway deploy. Visit http://localhost:8000 after it boots.
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
     depends_on:
       db:
         condition: service_healthy
     environment:
       DATABASE_URL: postgresql+psycopg2://badminton:badminton@db:5432/badminton
-      ADMIN_EMAILS: ${ADMIN_EMAILS:-you@example.com}
+      ADMIN_ACCESS_CODE: ${ADMIN_ACCESS_CODE:-trials2026}
       SECRET_KEY: ${SECRET_KEY:-dev-insecure-secret-change-me}
-      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
-      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
-      OAUTH_REDIRECT_URI: ${OAUTH_REDIRECT_URI:-http://localhost:8000/api/auth/callback}
-      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:5173}
-      ALLOW_DEV_LOGIN: ${ALLOW_DEV_LOGIN:-false}
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:8000}
+      PORT: "8000"
     ports:
       - "8000:8000"
 

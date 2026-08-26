@@ -1,72 +1,62 @@
-Timestamp,Full Name,College Branch,Email,Phone Number,Played States or Nationals,Applying For
-2026/07/02 10:01:00,Aarav Sharma,Computer Science,aarav.sharma@college.edu,9800000000,None,Men's Team
-2026/07/03 10:02:00,Vivaan Gupta,Mechanical,vivaan.gupta@college.edu,9800000137,States,Men's Team
-2026/07/04 10:03:00,Aditya Nair,Electronics,aditya.nair@college.edu,9800000274,Nationals,Men's Team
-2026/07/05 10:04:00,Vihaan Reddy,Civil,vihaan.reddy@college.edu,9800000411,Both,Men's Team
-2026/07/06 10:05:00,Arjun Mehta,Electrical,arjun.mehta@college.edu,9800000548,None,Men's Team
-2026/07/07 10:06:00,Sai Krishnan,Information Tech,sai.krishnan@college.edu,9800000685,States,Men's Team
-2026/07/08 10:07:00,Reyansh Iyer,Chemical,reyansh.iyer@college.edu,9800000822,Nationals,Men's Team
-2026/07/09 10:08:00,Krishna Rao,Biotech,krishna.rao@college.edu,9800000959,Both,Men's Team
-2026/07/10 10:09:00,Ishaan Verma,Aerospace,ishaan.verma@college.edu,9800001096,None,Men's Team
-2026/07/11 10:10:00,Rohan Das,Metallurgy,rohan.das@college.edu,9800001233,States,Men's Team
-2026/07/12 10:11:00,Kabir Chauhan,Computer Science,kabir.chauhan@college.edu,9800001370,Nationals,Men's Team
-2026/07/13 10:12:00,Ayaan Khan,Mechanical,ayaan.khan@college.edu,9800001507,Both,Men's Team
-2026/07/14 10:13:00,Dhruv Patel,Electronics,dhruv.patel@college.edu,9800001644,None,Men's Team
-2026/07/15 10:14:00,Ansh Malhotra,Civil,ansh.malhotra@college.edu,9800001781,States,Men's Team
-2026/07/16 10:15:00,Yuvraj Singh,Electrical,yuvraj.singh@college.edu,9800001918,Nationals,Men's Team
-2026/07/17 10:16:00,Aryan Bose,Information Tech,aryan.bose@college.edu,9800002055,Both,Men's Team
-2026/07/18 10:17:00,Kian Joseph,Chemical,kian.joseph@college.edu,9800002192,None,Men's Team
-2026/07/19 10:18:00,Neel Kulkarni,Biotech,neel.kulkarni@college.edu,9800002329,States,Men's Team
-2026/07/20 10:19:00,Advait Menon,Aerospace,advait.menon@college.edu,9800002466,Nationals,Men's Team
-2026/07/21 10:20:00,Rudra Pillai,Metallurgy,rudra.pillai@college.edu,9800002603,Both,Men's Team
-2026/07/22 10:21:00,Shaurya Sinha,Computer Science,shaurya.sinha@college.edu,9800002740,None,Men's Team
-2026/07/23 10:22:00,Atharv Jain,Mechanical,atharv.jain@college.edu,9800002877,States,Men's Team
-2026/07/24 10:23:00,Om Bhat,Electronics,om.bhat@college.edu,9800003014,Nationals,Men's Team
-2026/07/25 10:24:00,Parth Agarwal,Civil,parth.agarwal@college.edu,9800003151,Both,Men's Team
-2026/07/26 10:25:00,Laksh Chaudhary,Electrical,laksh.chaudhary@college.edu,9800003288,None,Men's Team
-2026/07/27 10:26:00,Veer Saxena,Information Tech,veer.saxena@college.edu,9800003425,States,Men's Team
-2026/07/01 10:27:00,Devansh Kapoor,Chemical,devansh.kapoor@college.edu,9800003562,Nationals,Men's Team
-2026/07/02 10:28:00,Aarush Ghosh,Biotech,aarush.ghosh@college.edu,9800003699,Both,Men's Team
-2026/07/03 10:29:00,Nakul Naidu,Aerospace,nakul.naidu@college.edu,9800003836,None,Men's Team
-2026/07/04 10:30:00,Tejas Banerjee,Metallurgy,tejas.banerjee@college.edu,9800003973,States,Men's Team
-2026/07/05 10:31:00,Harsh Vardhan,Computer Science,harsh.vardhan@college.edu,9800004110,Nationals,Men's Team
-2026/07/06 10:32:00,Manav Trivedi,Mechanical,manav.trivedi@college.edu,9800004247,Both,Men's Team
-2026/07/07 10:33:00,Rishab Shetty,Electronics,rishab.shetty@college.edu,9800004384,None,Men's Team
-2026/07/08 10:34:00,Yash Deshmukh,Civil,yash.deshmukh@college.edu,9800004521,States,Men's Team
-2026/07/09 10:35:00,Karan Dubey,Electrical,karan.dubey@college.edu,9800004658,Nationals,Men's Team
-2026/07/10 10:36:00,Aadhya Sharma,Computer Science,aadhya.sharma@college.edu,9800013700,None,Women's Team
-2026/07/11 10:37:00,Ananya Gupta,Mechanical,ananya.gupta@college.edu,9800013837,States,Women's Team
-2026/07/12 10:38:00,Diya Nair,Electronics,diya.nair@college.edu,9800013974,Nationals,Women's Team
-2026/07/13 10:39:00,Ira Reddy,Civil,ira.reddy@college.edu,9800014111,Both,Women's Team
-2026/07/14 10:40:00,Myra Mehta,Electrical,myra.mehta@college.edu,9800014248,None,Women's Team
-2026/07/15 10:41:00,Anika Krishnan,Information Tech,anika.krishnan@college.edu,9800014385,States,Women's Team
-2026/07/16 10:42:00,Saanvi Iyer,Chemical,saanvi.iyer@college.edu,9800014522,Nationals,Women's Team
-2026/07/17 10:43:00,Kiara Rao,Biotech,kiara.rao@college.edu,9800014659,Both,Women's Team
-2026/07/18 10:44:00,Aarohi Verma,Aerospace,aarohi.verma@college.edu,9800014796,None,Women's Team
-2026/07/19 10:45:00,Riya Das,Metallurgy,riya.das@college.edu,9800014933,States,Women's Team
-2026/07/20 10:46:00,Navya Chauhan,Computer Science,navya.chauhan@college.edu,9800015070,Nationals,Women's Team
-2026/07/21 10:47:00,Prisha Khan,Mechanical,prisha.khan@college.edu,9800015207,Both,Women's Team
-2026/07/22 10:48:00,Sara Patel,Electronics,sara.patel@college.edu,9800015344,None,Women's Team
-2026/07/23 10:49:00,Avni Malhotra,Civil,avni.malhotra@college.edu,9800015481,States,Women's Team
-2026/07/24 10:50:00,Meera Singh,Electrical,meera.singh@college.edu,9800015618,Nationals,Women's Team
-2026/07/25 10:51:00,Ishita Bose,Information Tech,ishita.bose@college.edu,9800015755,Both,Women's Team
-2026/07/26 10:52:00,Zara Joseph,Chemical,zara.joseph@college.edu,9800015892,None,Women's Team
-2026/07/27 10:53:00,Tara Kulkarni,Biotech,tara.kulkarni@college.edu,9800016029,States,Women's Team
-2026/07/01 10:54:00,Kavya Menon,Aerospace,kavya.menon@college.edu,9800016166,Nationals,Women's Team
-2026/07/02 10:55:00,Anvi Pillai,Metallurgy,anvi.pillai@college.edu,9800016303,Both,Women's Team
-2026/07/03 10:56:00,Pari Sinha,Computer Science,pari.sinha@college.edu,9800016440,None,Women's Team
-2026/07/04 10:57:00,Nithya Jain,Mechanical,nithya.jain@college.edu,9800016577,States,Women's Team
-2026/07/05 10:58:00,Siya Bhat,Electronics,siya.bhat@college.edu,9800016714,Nationals,Women's Team
-2026/07/06 10:59:00,Riddhi Agarwal,Civil,riddhi.agarwal@college.edu,9800016851,Both,Women's Team
-2026/07/07 10:00:00,Aria Chaudhary,Electrical,aria.chaudhary@college.edu,9800016988,None,Women's Team
-2026/07/08 10:01:00,Mahi Saxena,Information Tech,mahi.saxena@college.edu,9800017125,States,Women's Team
-2026/07/09 10:02:00,Trisha Kapoor,Chemical,trisha.kapoor@college.edu,9800017262,Nationals,Women's Team
-2026/07/10 10:03:00,Niharika Ghosh,Biotech,niharika.ghosh@college.edu,9800017399,Both,Women's Team
-2026/07/11 10:04:00,Aarav Sharma,Computer Science,dupe1@college.edu,+91 9800000000,States,Men's Team
-2026/07/12 10:05:00,Vivaan Gupta,Mechanical,dupe2@college.edu,09800000137,None,Men's Team
-2026/07/13 10:06:00,Aadhya Sharma,Computer Science,dupe3@college.edu,98000-13700,Both,Women's Team
-2026/07/14 10:07:00,Rahul Nanda  ,  Computer Science , rahul.nanda@college.edu ,  9800008220 , States , Men's Team 
-2026/07/15 10:08:00,Sneha Rao  ,Civil ,sneha.rao@college.edu ,9800021920  ,Nationals,Women's Team 
-2026/07/16 10:09:00,No Phone Guy,Mechanical,nophone@college.edu,,None,Men's Team
-2026/07/17 10:10:00,Confused Entry,Civil,confused@college.edu,9800009590,None,Mixed Doubles
-2026/07/18 10:11:00,,Electrical,noname@college.edu,9800010960,States,Men's Team
+Timestamp,Name,Gender,Phone Number,Registration Number,Year of Study (4th years not allowed),Level of Exprience
+02/08/2026 10:01:00,Aarav Sharma,Male,9800000000,261090050000,1st Year,Nationals or States
+03/08/2026 10:02:00,Vivaan Gupta,Male,9800000137,261090050001,2nd Year,District or Local Tournaments
+04/08/2026 10:03:00,Aditya Nair,Male,9800000274,261090050002,3rd Year,School
+05/08/2026 10:04:00,Vihaan Reddy,Male,9800000411,261090050003,1st Year,Casual
+06/08/2026 10:05:00,Arjun Mehta,Male,9800000548,261090050004,2nd Year,No experience or Beginner
+07/08/2026 10:06:00,Sai Krishnan,Male,9800000685,261090050005,3rd Year,Nationals or States
+08/08/2026 10:07:00,Reyansh Iyer,Male,9800000822,261090050006,1st Year,District or Local Tournaments
+09/08/2026 10:08:00,Krishna Rao,Male,9800000959,261090050007,2nd Year,School
+10/08/2026 10:09:00,Ishaan Verma,Male,9800001096,261090050008,3rd Year,Casual
+11/08/2026 10:10:00,Rohan Das,Male,9800001233,261090050009,1st Year,No experience or Beginner
+12/08/2026 10:11:00,Kabir Chauhan,Male,9800001370,261090050010,2nd Year,Nationals or States
+13/08/2026 10:12:00,Ayaan Khan,Male,9800001507,261090050011,3rd Year,District or Local Tournaments
+14/08/2026 10:13:00,Dhruv Patel,Male,9800001644,261090050012,1st Year,School
+15/08/2026 10:14:00,Ansh Malhotra,Male,9800001781,261090050013,2nd Year,Casual
+16/08/2026 10:15:00,Yuvraj Singh,Male,9800001918,261090050014,3rd Year,No experience or Beginner
+17/08/2026 10:16:00,Aryan Bose,Male,9800002055,261090050015,1st Year,Nationals or States
+18/08/2026 10:17:00,Kian Joseph,Male,9800002192,261090050016,2nd Year,District or Local Tournaments
+19/08/2026 10:18:00,Neel Kulkarni,Male,9800002329,261090050017,3rd Year,School
+20/08/2026 10:19:00,Advait Menon,Male,9800002466,261090050018,1st Year,Casual
+21/08/2026 10:20:00,Rudra Pillai,Male,9800002603,261090050019,2nd Year,No experience or Beginner
+22/08/2026 10:21:00,Shaurya Sinha,Male,9800002740,261090050020,3rd Year,Nationals or States
+23/08/2026 10:22:00,Atharv Jain,Male,9800002877,261090050021,1st Year,District or Local Tournaments
+24/08/2026 10:23:00,Om Bhat,Male,9800003014,261090050022,2nd Year,School
+25/08/2026 10:24:00,Parth Agarwal,Male,9800003151,261090050023,3rd Year,Casual
+26/08/2026 10:25:00,Laksh Chaudhary,Male,9800003288,261090050024,1st Year,No experience or Beginner
+27/08/2026 10:26:00,Veer Saxena,Male,9800003425,261090050025,2nd Year,Nationals or States
+01/08/2026 10:27:00,Devansh Kapoor,Male,9800003562,261090050026,3rd Year,District or Local Tournaments
+02/08/2026 10:28:00,Aarush Ghosh,Male,9800003699,261090050027,1st Year,School
+03/08/2026 10:29:00,Nakul Naidu,Male,9800003836,261090050028,2nd Year,Casual
+04/08/2026 10:30:00,Tejas Banerjee,Male,9800003973,261090050029,3rd Year,No experience or Beginner
+05/08/2026 10:31:00,Harsh Vardhan,Male,9800004110,261090050030,1st Year,Nationals or States
+06/08/2026 10:32:00,Manav Trivedi,Male,9800004247,261090050031,2nd Year,District or Local Tournaments
+07/08/2026 10:33:00,Rishab Shetty,Male,9800004384,261090050032,3rd Year,School
+08/08/2026 10:34:00,Yash Deshmukh,Male,9800004521,261090050033,1st Year,Casual
+09/08/2026 10:35:00,Karan Dubey,Male,9800004658,261090050034,2nd Year,No experience or Beginner
+10/08/2026 10:36:00,Aadhya Sharma,Female,9800013700,261090050100,1st Year,Nationals or States
+11/08/2026 10:37:00,Ananya Gupta,Female,9800013837,261090050101,2nd Year,District or Local Tournaments
+12/08/2026 10:38:00,Diya Nair,Female,9800013974,261090050102,3rd Year,School
+13/08/2026 10:39:00,Ira Reddy,Female,9800014111,261090050103,1st Year,Casual
+14/08/2026 10:40:00,Myra Mehta,Female,9800014248,261090050104,2nd Year,No experience or Beginner
+15/08/2026 10:41:00,Anika Krishnan,Female,9800014385,261090050105,3rd Year,Nationals or States
+16/08/2026 10:42:00,Saanvi Iyer,Female,9800014522,261090050106,1st Year,District or Local Tournaments
+17/08/2026 10:43:00,Kiara Rao,Female,9800014659,261090050107,2nd Year,School
+18/08/2026 10:44:00,Aarohi Verma,Female,9800014796,261090050108,3rd Year,Casual
+19/08/2026 10:45:00,Riya Das,Female,9800014933,261090050109,1st Year,No experience or Beginner
+20/08/2026 10:46:00,Navya Chauhan,Female,9800015070,261090050110,2nd Year,Nationals or States
+21/08/2026 10:47:00,Prisha Khan,Female,9800015207,261090050111,3rd Year,District or Local Tournaments
+22/08/2026 10:48:00,Sara Patel,Female,9800015344,261090050112,1st Year,School
+23/08/2026 10:49:00,Avni Malhotra,Female,9800015481,261090050113,2nd Year,Casual
+24/08/2026 10:50:00,Meera Singh,Female,9800015618,261090050114,3rd Year,No experience or Beginner
+25/08/2026 10:51:00,Ishita Bose,Female,9800015755,261090050115,1st Year,Nationals or States
+26/08/2026 10:52:00,Zara Joseph,Female,9800015892,261090050116,2nd Year,District or Local Tournaments
+27/08/2026 10:53:00,Tara Kulkarni,Female,9800016029,261090050117,3rd Year,School
+01/08/2026 10:54:00,Kavya Menon,Female,9800016166,261090050118,1st Year,Casual
+02/08/2026 10:55:00,Anvi Pillai,Female,9800016303,261090050119,2nd Year,No experience or Beginner
+03/08/2026 10:56:00,Aarav Sharma,Male,+91 9800000000,261090050000,1st Year,School
+04/08/2026 10:57:00,Vivaan Gupta,Male,09800000137,261090050001,1st Year,Nationals or States
+05/08/2026 10:58:00,Aadhya Sharma,Female,98000-13700,261090050100,1st Year,District or Local Tournaments
+06/08/2026 10:59:00,Rahul Nanda  , Male ,  9800008220 ,261090050060, 1st Year , Casual 
+07/08/2026 10:00:00,No Phone Guy,Male,,261090050070,1st Year,School
+08/08/2026 10:01:00,Confused Entry,Other,9800010960,261090050080,1st Year,Casual

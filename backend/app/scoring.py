@@ -53,9 +53,9 @@ def resolve_format(db: Session, tournament: Tournament, round_number: int) -> Ro
     return RoundFormat(
         tournament_id=tournament.id,
         round_number=None,
-        points_to_win=15,
+        points_to_win=21,
         win_by_two=True,
-        hard_cap=None,
+        hard_cap=30,
         games_to_win_match=1,
     )
 

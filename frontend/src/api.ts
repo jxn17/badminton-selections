@@ -1,14 +1,20 @@
-// Typed API client. All requests use credentials so the admin session cookie
-// rides along. Read endpoints are public; /admin/* require an admin session.
+// Typed API client. Requests send credentials so the admin session cookie rides
+// along. Read endpoints are public; /admin/* require an admin session.
 
 export type Category = "men" | "women";
 
 export interface Player {
   id: number;
   full_name: string;
-  college_branch: string | null;
-  states_nationals: string | null;
   category: Category;
+  group_label: string | null;
+  experience_level: string | null;
+  year_of_study: string | null;
+  is_walkin: boolean;
+  flagged: boolean;
+  flag_note: string | null;
+  phone: string | null; // admin-only; null for public
+  registration_number: string | null;
 }
 
 export interface Game {
@@ -30,6 +36,7 @@ export interface Match {
   retired_player_id: number | null;
   next_match_id: number | null;
   status: MatchStatus;
+  scheduled_time: string | null;
   games: Game[];
 }
 
@@ -45,6 +52,7 @@ export interface RoundFormat {
 export interface Tournament {
   id: number;
   category: Category;
+  group_label: string | null;
   status: "draft" | "locked" | "completed";
   draw_seed: number | null;
   bracket_size: number | null;
@@ -58,10 +66,28 @@ export interface Bracket {
   formats: RoundFormat[];
 }
 
+export interface GroupSummary {
+  group_label: string | null;
+  category: Category;
+  status: "draft" | "locked" | "completed";
+  player_count: number;
+  bracket_size: number | null;
+  num_byes: number | null;
+}
+
 export interface Me {
-  authenticated: boolean;
-  email: string | null;
   is_admin: boolean;
+  name: string | null;
+}
+
+export class ApiError extends Error {
+  status: number;
+  detail: unknown;
+  constructor(status: number, detail: unknown) {
+    super(typeof detail === "string" ? detail : JSON.stringify(detail));
+    this.status = status;
+    this.detail = detail;
+  }
 }
 
 async function req<T>(url: string, options: RequestInit = {}): Promise<T> {
@@ -84,24 +110,22 @@ async function req<T>(url: string, options: RequestInit = {}): Promise<T> {
   return (await res.json()) as T;
 }
 
-export class ApiError extends Error {
-  status: number;
-  detail: unknown;
-  constructor(status: number, detail: unknown) {
-    super(typeof detail === "string" ? detail : JSON.stringify(detail));
-    this.status = status;
-    this.detail = detail;
-  }
-}
-
 export const api = {
   me: () => req<Me>("/api/auth/me"),
+  codeLogin: (code: string, name: string) =>
+    req<{ ok: boolean; name: string }>("/api/auth/code-login", {
+      method: "POST",
+      body: JSON.stringify({ code, name }),
+    }),
   logout: () => req<{ ok: boolean }>("/api/auth/logout", { method: "POST" }),
-  devLogin: () => req<{ ok: boolean; email: string }>("/api/auth/dev-login", { method: "POST" }),
 
-  bracket: (cat: Category) => req<Bracket>(`/api/categories/${cat}/bracket`),
+  groups: () => req<GroupSummary[]>("/api/groups"),
+  bracket: (category: Category, group?: string | null) => {
+    const q = new URLSearchParams({ category });
+    if (group) q.set("group", group);
+    return req<Bracket>(`/api/bracket?${q.toString()}`);
+  },
 
-  // Admin
   importCsv: async (file: File) => {
     const form = new FormData();
     form.append("file", file);
@@ -113,44 +137,46 @@ export const api = {
     if (!res.ok) throw new ApiError(res.status, await res.text());
     return res.json();
   },
-  generateDraw: (cat: Category, seed?: number) =>
-    req<{ seed: number; bracket_size: number; num_byes: number }>(
-      `/api/admin/${cat}/draw`,
-      { method: "POST", body: JSON.stringify({ seed: seed ?? null }) },
-    ),
-  lockDraw: (cat: Category) =>
-    req<{ status: string }>(`/api/admin/${cat}/lock`, { method: "POST" }),
+  rebuildMen: (seed?: number) =>
+    req<any>("/api/admin/men/rebuild", { method: "POST", body: JSON.stringify({ seed: seed ?? null }) }),
+  rebuildWomen: (seed?: number) =>
+    req<any>("/api/admin/women/rebuild", { method: "POST", body: JSON.stringify({ seed: seed ?? null }) }),
+  lock: (tid: number) => req<any>(`/api/admin/tournaments/${tid}/lock`, { method: "POST" }),
+  unlock: (tid: number) => req<any>(`/api/admin/tournaments/${tid}/unlock`, { method: "POST" }),
 
-  updateScore: (cat: Category, matchId: number, games: Game[]) =>
-    req<Match>(`/api/admin/${cat}/matches/${matchId}/score`, {
-      method: "PUT",
-      body: JSON.stringify({ games }),
-    }),
-  retire: (cat: Category, matchId: number, retiredPlayerId: number) =>
-    req<Match>(`/api/admin/${cat}/matches/${matchId}/retire`, {
+  updateScore: (matchId: number, games: Game[]) =>
+    req<Match>(`/api/admin/matches/${matchId}/score`, { method: "PUT", body: JSON.stringify({ games }) }),
+  retire: (matchId: number, retiredPlayerId: number) =>
+    req<Match>(`/api/admin/matches/${matchId}/retire`, {
       method: "POST",
       body: JSON.stringify({ retired_player_id: retiredPlayerId }),
     }),
-  unretire: (cat: Category, matchId: number) =>
-    req<Match>(`/api/admin/${cat}/matches/${matchId}/retire`, { method: "DELETE" }),
-  resetMatch: (cat: Category, matchId: number) =>
-    req<Match>(`/api/admin/${cat}/matches/${matchId}/reset`, { method: "POST" }),
-
-  listFormats: (cat: Category) => req<RoundFormat[]>(`/api/admin/${cat}/formats`),
-  upsertFormat: (cat: Category, fmt: Omit<RoundFormat, "id">) =>
-    req<RoundFormat>(`/api/admin/${cat}/formats`, {
+  unretire: (matchId: number) => req<Match>(`/api/admin/matches/${matchId}/retire`, { method: "DELETE" }),
+  resetMatch: (matchId: number) => req<Match>(`/api/admin/matches/${matchId}/reset`, { method: "POST" }),
+  setSchedule: (matchId: number, scheduled_time: string) =>
+    req<any>(`/api/admin/matches/${matchId}/schedule`, {
       method: "PUT",
-      body: JSON.stringify(fmt),
+      body: JSON.stringify({ scheduled_time }),
     }),
-  deleteFormat: (cat: Category, roundNumber: number) =>
-    req<{ ok: boolean }>(`/api/admin/${cat}/formats/${roundNumber}`, { method: "DELETE" }),
 
-  listAdmins: () => req<{ id: number; email: string; added_by: string | null }[]>("/api/admin/admins"),
-  addAdmin: (email: string) =>
-    req<{ id: number; email: string }>("/api/admin/admins", {
+  flagPlayer: (playerId: number, flagged: boolean, note?: string) =>
+    req<any>(`/api/admin/players/${playerId}/flag`, {
       method: "POST",
-      body: JSON.stringify({ email }),
+      body: JSON.stringify({ flagged, note: note ?? null }),
     }),
-  removeAdmin: (id: number) =>
-    req<{ ok: boolean }>(`/api/admin/admins/${id}`, { method: "DELETE" }),
+  swap: (tid: number, x: number, y: number) =>
+    req<any>(`/api/admin/tournaments/${tid}/swap`, {
+      method: "POST",
+      body: JSON.stringify({ player_x_id: x, player_y_id: y }),
+    }),
+  walkin: (category: Category, body: { name: string; phone: string; experience: string; group_label: string | null }) =>
+    req<any>(`/api/admin/walkin/${category}`, { method: "POST", body: JSON.stringify(body) }),
+
+  listFormats: (tid: number) => req<RoundFormat[]>(`/api/admin/tournaments/${tid}/formats`),
+  upsertFormat: (tid: number, fmt: Omit<RoundFormat, "id">) =>
+    req<RoundFormat>(`/api/admin/tournaments/${tid}/formats`, { method: "PUT", body: JSON.stringify(fmt) }),
+  deleteFormat: (tid: number, round: number) =>
+    req<any>(`/api/admin/tournaments/${tid}/formats/${round}`, { method: "DELETE" }),
+
+  audit: () => req<any[]>("/api/admin/audit"),
 };
