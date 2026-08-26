@@ -18,7 +18,7 @@ from ..scoring import (
     clear_retirement,
     set_retirement,
 )
-from ..service import add_walkin, rebuild_men, rebuild_women, swap_players
+from ..service import add_walkin, rebuild_men, rebuild_women, remove_player, swap_players
 from ..schemas import (
     FlagIn,
     GenerateDrawIn,
@@ -208,6 +208,17 @@ def flag_player(player_id: int, body: FlagIn, db: Session = Depends(get_db), adm
     record(db, admin, "flag_player", "player", p.id, before, {"flagged": p.flagged, "flag_note": p.flag_note})
     db.commit()
     return {"id": p.id, "flagged": p.flagged, "flag_note": p.flag_note}
+
+
+@router.delete("/players/{player_id}")
+def delete_player(player_id: int, db: Session = Depends(get_db), admin: str = Depends(require_admin)):
+    try:
+        result = remove_player(db, player_id)
+    except ScoringError as exc:
+        _scoring_error(exc)
+    record(db, admin, "remove_player", "player", player_id, after=result)
+    db.commit()
+    return result
 
 
 @router.post("/tournaments/{tournament_id}/swap")

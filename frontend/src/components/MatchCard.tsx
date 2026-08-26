@@ -143,7 +143,7 @@ export default function MatchCard({
             <button
               disabled={!swapMode || p === null}
               onClick={() => p && onSelectForSwap(p.id)}
-              className={`truncate text-left ${swapMode && p ? "hover:underline cursor-pointer" : "cursor-default"}`}
+              className={`min-w-0 truncate text-left ${swapMode && p ? "hover:underline cursor-pointer" : "cursor-default"}`}
               title={swapMode ? "Click to select for swap" : undefined}
             >
               {isByeSlot ? <span className="text-slate-400 italic">Bye</span> : p ? p.full_name : "TBD"}
@@ -152,17 +152,28 @@ export default function MatchCard({
             {p?.is_walkin && (
               <span className="text-[9px] uppercase bg-purple-100 text-purple-700 px-1 rounded">spot</span>
             )}
-          </div>
-          <div className="flex items-center gap-1.5 mt-0.5">
-            {tag && <span className={`text-[9px] px-1 rounded ${tag.cls}`}>{tag.label}</span>}
+            {/* Call sign, to the right of the name. */}
             {editable && p?.phone && (
               <a
                 href={`tel:${p.phone}`}
                 onClick={(e) => e.stopPropagation()}
-                className="text-[10px] text-court hover:underline inline-flex items-center gap-0.5"
+                className="ml-auto shrink-0 text-court text-sm leading-none"
                 title={`Call ${p.full_name}`}
               >
-                📞 {p.phone}
+                📞
+              </a>
+            )}
+          </div>
+          <div className="flex items-center gap-1.5 mt-0.5">
+            {tag && <span className={`text-[9px] px-1 rounded ${tag.cls}`}>{tag.label}</span>}
+            {/* Phone number only, below the name. */}
+            {editable && p?.phone && (
+              <a
+                href={`tel:${p.phone}`}
+                onClick={(e) => e.stopPropagation()}
+                className="text-[10px] text-court hover:underline tabular-nums"
+              >
+                {p.phone}
               </a>
             )}
           </div>

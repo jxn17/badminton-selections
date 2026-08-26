@@ -32,7 +32,8 @@ def player_out(p: Player, include_pii: bool) -> PlayerOut:
         is_walkin=p.is_walkin,
         flagged=(p.flagged if include_pii else False),
         flag_note=(p.flag_note if include_pii else None),
-        phone=(p.phone_raw if include_pii else None),
+        # Normalized = clean last-10-digits (drops +91 / spaces / leading 0).
+        phone=(p.phone_normalized if include_pii else None),
         registration_number=(p.registration_number if include_pii else None),
     )
 
@@ -47,6 +48,91 @@ def _parse_category(value: str) -> Category:
 @router.get("/health")
 def health():
     return {"status": "ok"}
+
+
+def _round_name(round_number: int, bracket_size: int | None) -> str:
+    if not bracket_size:
+        return f"Round {round_number}"
+    total = max(1, bracket_size.bit_length() - 1)  # log2(bracket_size)
+    from_end = total - round_number
+    if from_end == 0:
+        return "Final"
+    if from_end == 1:
+        return "Semifinal"
+    if from_end == 2:
+        return "Quarterfinal"
+    return f"Round of {2 ** (from_end + 1)}"
+
+
+@router.get("/search")
+def search_players(request: Request, q: str = "", db: Session = Depends(get_db)):
+    """Find players by name; return their group, opponent(s), and match time(s)."""
+    include_pii = current_admin_name(request) is not None
+    q = (q or "").strip()
+    if len(q) < 2:
+        return []
+
+    players = (
+        db.query(Player)
+        .filter(Player.full_name.ilike(f"%{q}%"))
+        .order_by(Player.full_name)
+        .limit(40)
+        .all()
+    )
+
+    # Index tournaments by (category, group_label) and cache names for opponents.
+    tournaments = {(t.category, t.group_label): t for t in db.query(Tournament).all()}
+    name_of = {p.id: p.full_name for p in db.query(Player).all()}
+
+    results = []
+    for p in players:
+        t = tournaments.get((p.category, p.group_label))
+        match_infos = []
+        if t is not None:
+            matches = (
+                db.query(Match)
+                .filter(
+                    Match.tournament_id == t.id,
+                    (Match.player_a_id == p.id) | (Match.player_b_id == p.id),
+                )
+                .order_by(Match.round_number)
+                .all()
+            )
+            for m in matches:
+                opp_id = m.player_b_id if m.player_a_id == p.id else m.player_a_id
+                if m.is_bye:
+                    opponent = "Bye"
+                elif opp_id is None:
+                    opponent = "TBD"
+                else:
+                    opponent = name_of.get(opp_id, "?")
+                result = None
+                if m.winner_id is not None:
+                    result = "won" if m.winner_id == p.id else "lost"
+                match_infos.append(
+                    {
+                        "match_id": m.id,
+                        "round_number": m.round_number,
+                        "round_name": _round_name(m.round_number, t.bracket_size),
+                        "opponent": opponent,
+                        "scheduled_time": m.scheduled_time,
+                        "status": m.status.value,
+                        "is_bye": m.is_bye,
+                        "result": result,
+                    }
+                )
+        results.append(
+            {
+                "id": p.id,
+                "full_name": p.full_name,
+                "category": p.category.value,
+                "group_label": p.group_label,
+                "experience_level": p.experience_level,
+                "phone": p.phone_normalized if include_pii else None,
+                "matches": match_infos,
+            }
+        )
+    return results
 
 
 @router.get("/flagged", response_model=list[PlayerOut])

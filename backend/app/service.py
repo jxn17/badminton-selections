@@ -9,7 +9,7 @@ from .csv_import import dedup_key_for, normalize_phone
 from .draw import generate_draw
 from .grouping import GROUP_LABELS, assign_men_groups, experience_rank
 from .models import Category, Match, MatchStatus, Player, RoundFormat, Tournament, TournamentStatus
-from .scoring import ScoringError, _is_started, _slot_is_a
+from .scoring import ScoringError, _advance, _is_started, _slot_is_a, _withdraw
 
 
 def default_format(tournament_id: int) -> RoundFormat:
@@ -174,6 +174,62 @@ def add_walkin(
         "placed": placed_into is not None,
         "match_id": placed_into,
     }
+
+
+def remove_player(db: Session, player_id: int) -> dict:
+    """Remove a player (withdrawal). If they're in a not-yet-played Round-1 match,
+    the opponent gets a walkover and advances. Blocks if the player has already
+    played or advanced into a started match (reset those first)."""
+    p = db.get(Player, player_id)
+    if p is None:
+        raise ScoringError("Player not found.")
+    name = p.full_name
+
+    r1 = (
+        db.query(Match)
+        .filter(
+            Match.round_number == 1,
+            (Match.player_a_id == p.id) | (Match.player_b_id == p.id),
+        )
+        .one_or_none()
+    )
+    if r1 is not None:
+        nxt = db.get(Match, r1.next_match_id) if r1.next_match_id else None
+        # They already won a real match and moved on.
+        if r1.status == MatchStatus.completed and not r1.is_bye:
+            raise ScoringError("This player has already played a match — reset it first, then remove.")
+        # They advanced (via bye) into a match that has started.
+        if r1.winner_id is not None and _is_started(nxt):
+            raise ScoringError("The next-round match has already started — reset it first, then remove.")
+
+        # Pull any advancement this match produced back out.
+        if r1.winner_id is not None and nxt is not None:
+            _withdraw(db, r1)
+
+        # Vacate the player's slot.
+        if r1.player_a_id == p.id:
+            r1.player_a_id = None
+        else:
+            r1.player_b_id = None
+        for g in list(r1.games):
+            db.delete(g)
+
+        opponent = r1.player_a_id if r1.player_a_id is not None else r1.player_b_id
+        if opponent is not None:
+            # Opponent walks over into the next round.
+            r1.is_bye = True
+            r1.winner_id = opponent
+            r1.status = MatchStatus.completed
+            _advance(db, r1)
+        else:
+            r1.is_bye = False
+            r1.winner_id = None
+            r1.status = MatchStatus.pending
+        db.flush()
+
+    db.delete(p)
+    db.flush()
+    return {"removed": player_id, "name": name}
 
 
 def _place_into_open_bye(

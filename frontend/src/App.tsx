@@ -5,6 +5,7 @@ import Bracket from "./components/Bracket";
 import AdminToolbar from "./components/AdminToolbar";
 import LoginBar from "./components/LoginBar";
 import FlaggedList from "./components/FlaggedList";
+import SearchBar from "./components/SearchBar";
 
 interface Selection {
   category: Category;
@@ -129,6 +130,21 @@ export default function App() {
       </header>
 
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 py-5">
+        {/* Player search */}
+        <div className="mb-4">
+          <SearchBar
+            isAdmin={auth.isAdmin}
+            onChanged={refresh}
+            onPick={(category, group) => {
+              const g = groups.find((x) => x.category === category && x.group_label === group);
+              if (g) {
+                setView("bracket");
+                setSel(selectionFor(g));
+              }
+            }}
+          />
+        </div>
+
         {/* Group navbar */}
         <div className="flex items-center gap-3 flex-wrap mb-4">
           <div className="flex items-center gap-1">

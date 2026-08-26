@@ -80,6 +80,27 @@ export interface Me {
   name: string | null;
 }
 
+export interface SearchMatch {
+  match_id: number;
+  round_number: number;
+  round_name: string;
+  opponent: string;
+  scheduled_time: string | null;
+  status: MatchStatus;
+  is_bye: boolean;
+  result: "won" | "lost" | null;
+}
+
+export interface SearchResult {
+  id: number;
+  full_name: string;
+  category: Category;
+  group_label: string | null;
+  experience_level: string | null;
+  phone: string | null;
+  matches: SearchMatch[];
+}
+
 export class ApiError extends Error {
   status: number;
   detail: unknown;
@@ -121,6 +142,8 @@ export const api = {
 
   groups: () => req<GroupSummary[]>("/api/groups"),
   flagged: () => req<Player[]>("/api/flagged"),
+  search: (q: string) => req<SearchResult[]>(`/api/search?q=${encodeURIComponent(q)}`),
+  removePlayer: (id: number) => req<{ removed: number; name: string }>(`/api/admin/players/${id}`, { method: "DELETE" }),
   bracket: (category: Category, group?: string | null) => {
     const q = new URLSearchParams({ category });
     if (group) q.set("group", group);
