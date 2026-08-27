@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ApiError, Category, Tournament, api } from "../api";
 import ScoringSettings from "./ScoringSettings";
 import MoveToGroupForm from "./MoveToGroupForm";
@@ -22,7 +22,37 @@ export default function AdminToolbar({ tournament, category, onChanged }: Props)
   const [msg, setMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState<string | null>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  // Close the menu on outside click or Escape (matters most on touch screens).
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onDown = (e: MouseEvent | TouchEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenuOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setMenuOpen(false);
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("touchstart", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("touchstart", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [menuOpen]);
+
+  /** Open a panel from the menu, closing the menu itself. */
+  function pick(panel: string) {
+    setOpen((cur) => (cur === panel ? null : panel));
+    setMenuOpen(false);
+  }
+  /** Run an action from the menu. */
+  function act(fn: () => void) {
+    setMenuOpen(false);
+    fn();
+  }
 
   async function run(fn: () => Promise<any>, ok?: (r: any) => string) {
     setBusy(true);
@@ -51,47 +81,98 @@ export default function AdminToolbar({ tournament, category, onChanged }: Props)
 
   return (
     <div className="bg-white border border-slate-200 rounded-xl p-3 space-y-3">
-      <div className="flex flex-wrap items-center gap-2">
-        <ToolbarBtn onClick={() => setOpen(open === "import" ? null : "import")}>Import CSV</ToolbarBtn>
-        <ToolbarBtn onClick={() => setOpen(open === "walkin" ? null : "walkin")}>+ Walk-in player</ToolbarBtn>
-        <ToolbarBtn onClick={() => setOpen(open === "move" ? null : "move")}>Move players to group</ToolbarBtn>
-        <ToolbarBtn onClick={() => setOpen(open === "sched" ? null : "sched")}>Set match times</ToolbarBtn>
-        {tournament && tournament.bracket_size ? (
-          locked ? (
-            <ToolbarBtn onClick={() => run(() => api.unlock(tournament.id), () => "Unlocked.")} disabled={busy}>
-              Unlock this draw
-            </ToolbarBtn>
-          ) : (
-            <ToolbarBtn
-              onClick={() => confirm("Lock this draw? Structure can't be regenerated after (scores still editable).") && run(() => api.lock(tournament.id), () => "Locked.")}
-              disabled={busy}
-            >
-              Lock this draw
-            </ToolbarBtn>
-          )
-        ) : null}
-        {tournament && tournament.bracket_size ? (
-          <ToolbarBtn onClick={() => setOpen(open === "scoring" ? null : "scoring")}>Scoring settings</ToolbarBtn>
-        ) : null}
+      <div className="flex items-center gap-3 flex-wrap">
+        <div className="relative" ref={menuRef}>
+          <button
+            onClick={() => setMenuOpen((v) => !v)}
+            aria-expanded={menuOpen}
+            aria-haspopup="menu"
+            className="flex items-center gap-2 text-sm px-3 py-2 rounded-md border border-slate-300 text-slate-700 bg-white hover:bg-slate-50"
+          >
+            Admin actions
+            <span className={`text-[10px] transition-transform ${menuOpen ? "rotate-180" : ""}`}>▼</span>
+          </button>
 
-        {/* Destructive redraws kept to the end — rarely needed after the initial build. */}
-        <div className="w-px h-6 bg-slate-200 mx-1" />
-        <ToolbarBtn
-          onClick={() => confirm("Redraw the women's 128 bracket? This wipes current women's scores.") && run(() => api.rebuildWomen(), () => "Women's draw rebuilt.")}
-          disabled={busy}
-        >
-          Rebuild women
-        </ToolbarBtn>
-        <ToolbarBtn
-          onClick={() =>
-            confirm("Rebuild the 4 men's groups and redraw all of them? This wipes current men's scores.") &&
-            run(() => api.rebuildMen(), (r) => `Men rebuilt: ${JSON.stringify(r.groups && Object.fromEntries(Object.entries(r.groups).map(([k, v]: any) => [k, v.count])))}`)
-          }
-          disabled={busy}
-        >
-          Rebuild men (A–D)
-        </ToolbarBtn>
-        {msg && <span className="text-xs text-slate-500">{msg}</span>}
+          {menuOpen && (
+            <div
+              role="menu"
+              className="absolute left-0 mt-1 z-30 w-[min(20rem,calc(100vw-2rem))] bg-white border border-slate-200 rounded-lg shadow-lg py-1"
+            >
+              <MenuItem onClick={() => pick("import")} active={open === "import"}>Import CSV</MenuItem>
+              <MenuItem onClick={() => pick("walkin")} active={open === "walkin"}>+ Walk-in player</MenuItem>
+              <MenuItem onClick={() => pick("move")} active={open === "move"}>Move players to group</MenuItem>
+              <MenuItem onClick={() => pick("sched")} active={open === "sched"}>Set match times</MenuItem>
+
+              {tournament && tournament.bracket_size ? (
+                <MenuItem onClick={() => pick("scoring")} active={open === "scoring"}>Scoring settings</MenuItem>
+              ) : null}
+
+              {tournament && tournament.bracket_size ? (
+                <>
+                  <div className="my-1 border-t border-slate-100" />
+                  {locked ? (
+                    <MenuItem
+                      onClick={() => act(() => run(() => api.unlock(tournament.id), () => "Unlocked."))}
+                      disabled={busy}
+                    >
+                      Unlock this draw
+                    </MenuItem>
+                  ) : (
+                    <MenuItem
+                      onClick={() =>
+                        act(() => {
+                          if (confirm("Lock this draw? Structure can't be regenerated after (scores still editable)."))
+                            run(() => api.lock(tournament.id), () => "Locked.");
+                        })
+                      }
+                      disabled={busy}
+                    >
+                      Lock this draw
+                    </MenuItem>
+                  )}
+                </>
+              ) : null}
+
+              {/* Destructive redraws last — rarely needed once the event starts. */}
+              <div className="my-1 border-t border-slate-100" />
+              <div className="px-3 pt-1 pb-0.5 text-[10px] uppercase tracking-wide text-slate-400">
+                Danger zone
+              </div>
+              <MenuItem
+                danger
+                disabled={busy}
+                onClick={() =>
+                  act(() => {
+                    if (confirm("Redraw the women's 128 bracket? This wipes current women's scores."))
+                      run(() => api.rebuildWomen(), () => "Women's draw rebuilt.");
+                  })
+                }
+              >
+                Rebuild women
+              </MenuItem>
+              <MenuItem
+                danger
+                disabled={busy}
+                onClick={() =>
+                  act(() => {
+                    if (confirm("Rebuild the 4 men's groups and redraw all of them? This wipes current men's scores."))
+                      run(
+                        () => api.rebuildMen(),
+                        (r) =>
+                          `Men rebuilt: ${JSON.stringify(
+                            r.groups && Object.fromEntries(Object.entries(r.groups).map(([k, v]: any) => [k, v.count])),
+                          )}`,
+                      );
+                  })
+                }
+              >
+                Rebuild men (A–D)
+              </MenuItem>
+            </div>
+          )}
+        </div>
+
+        {msg && <span className="text-xs text-slate-500 flex-1 min-w-0">{msg}</span>}
       </div>
 
       {open === "import" && (
@@ -160,11 +241,19 @@ function Panel({ title, onClose, children }: { title: string; onClose: () => voi
   );
 }
 
-function ToolbarBtn({ children, ...rest }: React.ButtonHTMLAttributes<HTMLButtonElement>) {
+function MenuItem({
+  children,
+  active,
+  danger,
+  ...rest
+}: React.ButtonHTMLAttributes<HTMLButtonElement> & { active?: boolean; danger?: boolean }) {
   return (
     <button
+      role="menuitem"
       {...rest}
-      className="text-sm px-3 py-1.5 rounded-md border border-slate-300 text-slate-700 hover:bg-slate-50 disabled:opacity-40"
+      className={`w-full text-left px-3 py-2.5 text-sm disabled:opacity-40 ${
+        danger ? "text-red-600 hover:bg-red-50" : "text-slate-700 hover:bg-slate-50"
+      } ${active ? "bg-slate-100 font-medium" : ""}`}
     >
       {children}
     </button>
