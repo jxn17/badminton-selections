@@ -18,9 +18,17 @@ from ..scoring import (
     clear_retirement,
     set_retirement,
 )
-from ..service import add_walkin, rebuild_men, rebuild_women, remove_player, swap_players
+from ..service import (
+    add_walkin,
+    move_players_to_groups,
+    rebuild_men,
+    rebuild_women,
+    remove_player,
+    swap_players,
+)
 from ..schemas import (
     FlagIn,
+    MoveToGroupIn,
     GenerateDrawIn,
     RetireIn,
     RoundFormatIn,
@@ -217,6 +225,22 @@ def delete_player(player_id: int, db: Session = Depends(get_db), admin: str = De
     except ScoringError as exc:
         _scoring_error(exc)
     record(db, admin, "remove_player", "player", player_id, after=result)
+    db.commit()
+    return result
+
+
+@router.post("/move-to-group")
+def move_to_group(
+    body: MoveToGroupIn,
+    db: Session = Depends(get_db),
+    admin: str = Depends(require_admin),
+):
+    """Bulk-move men into given groups (e.g. everyone who can only play Sunday)."""
+    try:
+        result = move_players_to_groups(db, body.phones, body.target_groups, Category.men)
+    except ScoringError as exc:
+        _scoring_error(exc)
+    record(db, admin, "move_to_group", "player", None, after=result)
     db.commit()
     return result
 

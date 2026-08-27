@@ -137,3 +137,9 @@ class RoundFormatIn(BaseModel):
 
 class GenerateDrawIn(BaseModel):
     seed: int | None = None
+
+
+class MoveToGroupIn(BaseModel):
+    """Move a set of players (by phone) into the given men's groups."""
+    phones: list[str]
+    target_groups: list[str]

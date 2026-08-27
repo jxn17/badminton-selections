@@ -143,6 +143,11 @@ export const api = {
   groups: () => req<GroupSummary[]>("/api/groups"),
   flagged: () => req<Player[]>("/api/flagged"),
   search: (q: string) => req<SearchResult[]>(`/api/search?q=${encodeURIComponent(q)}`),
+  moveToGroup: (phones: string[], target_groups: string[]) =>
+    req<any>("/api/admin/move-to-group", {
+      method: "POST",
+      body: JSON.stringify({ phones, target_groups }),
+    }),
   removePlayer: (id: number) => req<{ removed: number; name: string }>(`/api/admin/players/${id}`, { method: "DELETE" }),
   bracket: (category: Category, group?: string | null) => {
     const q = new URLSearchParams({ category });

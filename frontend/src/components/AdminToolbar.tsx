@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import { ApiError, Category, Tournament, api } from "../api";
 import ScoringSettings from "./ScoringSettings";
+import MoveToGroupForm from "./MoveToGroupForm";
 
 interface Props {
   tournament: Tournament | null;
@@ -52,6 +53,7 @@ export default function AdminToolbar({ tournament, category, onChanged }: Props)
       <div className="flex flex-wrap items-center gap-2">
         <ToolbarBtn onClick={() => setOpen(open === "import" ? null : "import")}>Import CSV</ToolbarBtn>
         <ToolbarBtn onClick={() => setOpen(open === "walkin" ? null : "walkin")}>+ Walk-in player</ToolbarBtn>
+        <ToolbarBtn onClick={() => setOpen(open === "move" ? null : "move")}>Move players to group</ToolbarBtn>
         {tournament && tournament.bracket_size ? (
           locked ? (
             <ToolbarBtn onClick={() => run(() => api.unlock(tournament.id), () => "Unlocked.")} disabled={busy}>
@@ -113,6 +115,12 @@ export default function AdminToolbar({ tournament, category, onChanged }: Props)
       {open === "walkin" && (
         <Panel title="Add walk-in player" onClose={() => setOpen(null)}>
           <WalkinForm category={category} onDone={(m) => { setMsg(m); onChanged(); }} />
+        </Panel>
+      )}
+
+      {open === "move" && (
+        <Panel title="Move players to group" onClose={() => setOpen(null)}>
+          <MoveToGroupForm onDone={(m) => { setMsg(m); onChanged(); }} />
         </Panel>
       )}
 

@@ -276,3 +276,153 @@ def _place_into_open_bye(
         return m.id
     return None
 
+
+
+# --------------------------------------------------------------------------
+# Moving players between groups (day-scheduling: e.g. "these can only come Sunday")
+# --------------------------------------------------------------------------
+def _group_has_played_matches(db: Session, tournament: Tournament) -> bool:
+    """True if any real (non-bye) match in this group already has a result."""
+    return (
+        db.query(Match)
+        .filter(
+            Match.tournament_id == tournament.id,
+            Match.is_bye.is_(False),
+            (Match.winner_id.isnot(None)) | (Match.status != MatchStatus.pending),
+        )
+        .first()
+        is not None
+    )
+
+
+def move_players_to_groups(
+    db: Session,
+    phones: list[str],
+    target_groups: list[str],
+    category: Category = Category.men,
+) -> dict:
+    """Move the given players into `target_groups`, keeping group sizes balanced.
+
+    Each player who isn't already in a target group is swapped with someone who
+    is (and who isn't themselves on the move list), so every group keeps its
+    size and its bracket shape. Affected groups are then redrawn.
+
+    Refuses if any affected group has already played matches, so this can never
+    silently discard scores.
+    """
+    target_groups = [g.strip().upper() for g in target_groups if g.strip()]
+    if not target_groups:
+        raise ScoringError("Pick at least one target group.")
+    for g in target_groups:
+        if g not in GROUP_LABELS:
+            raise ScoringError(f"Unknown group {g!r}.")
+
+    # --- Resolve the phone list to players ---
+    wanted: list[Player] = []
+    not_found: list[str] = []
+    seen_ids: set[int] = set()
+    for raw in phones:
+        norm = normalize_phone(raw)
+        if not norm:
+            not_found.append(raw)
+            continue
+        p = (
+            db.query(Player)
+            .filter(Player.phone_normalized == norm, Player.category == category)
+            .one_or_none()
+        )
+        if p is None:
+            not_found.append(raw)
+        elif p.id not in seen_ids:
+            seen_ids.add(p.id)
+            wanted.append(p)
+
+    protected = {p.id for p in wanted}
+    already = [p for p in wanted if p.group_label in target_groups]
+    to_move = [p for p in wanted if p.group_label not in target_groups]
+
+    # --- Guard: never wipe entered scores ---
+    affected_labels = {p.group_label for p in to_move if p.group_label} | set(target_groups)
+    tournaments = {
+        g: db.query(Tournament)
+        .filter(Tournament.category == category, Tournament.group_label == g)
+        .one_or_none()
+        for g in affected_labels
+    }
+    for g, t in tournaments.items():
+        if t is None:
+            continue
+        if t.status == TournamentStatus.locked:
+            raise ScoringError(f"Group {g} is locked. Unlock it before moving players.")
+        if _group_has_played_matches(db, t):
+            raise ScoringError(
+                f"Group {g} already has match results. Moving players would discard them."
+            )
+
+    # --- Swap each mover with a partner from a target group ---
+    moved: list[dict] = []
+    failed: list[dict] = []
+    # Round-robin across the target groups so they stay evenly filled.
+    order = list(target_groups)
+    idx = 0
+    for p in to_move:
+        placed = False
+        for _ in range(len(order)):
+            target = order[idx % len(order)]
+            idx += 1
+            partner = (
+                db.query(Player)
+                .filter(
+                    Player.category == category,
+                    Player.group_label == target,
+                    Player.id.notin_(protected),
+                )
+                .order_by(Player.id)
+                .first()
+            )
+            if partner is None:
+                continue
+            origin = p.group_label
+            p.group_label = target
+            partner.group_label = origin
+            protected.add(partner.id)  # don't bounce them back out
+            affected_labels.add(origin or "")
+            affected_labels.add(target)
+            moved.append(
+                {
+                    "name": p.full_name,
+                    "phone": p.phone_normalized,
+                    "from": origin,
+                    "to": target,
+                    "swapped_with": partner.full_name,
+                }
+            )
+            placed = True
+            break
+        if not placed:
+            failed.append({"name": p.full_name, "reason": "no swap partner available"})
+    db.flush()
+
+    # --- Redraw every affected group so brackets match the new rosters ---
+    redrawn = []
+    for g in sorted(x for x in affected_labels if x):
+        t = (
+            db.query(Tournament)
+            .filter(Tournament.category == category, Tournament.group_label == g)
+            .one_or_none()
+        )
+        if t is None or t.status == TournamentStatus.locked:
+            continue
+        generate_draw(db, t)
+        redrawn.append(g)
+
+    db.commit()
+    return {
+        "moved": moved,
+        "already_in_target": [
+            {"name": p.full_name, "group": p.group_label} for p in already
+        ],
+        "not_found": not_found,
+        "failed": failed,
+        "redrawn_groups": redrawn,
+    }
