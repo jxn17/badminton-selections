@@ -153,13 +153,26 @@ export const api = {
   importCsv: async (file: File) => {
     const form = new FormData();
     form.append("file", file);
-    const res = await fetch("/api/admin/import", {
-      method: "POST",
-      credentials: "include",
-      body: form,
-    });
-    if (!res.ok) throw new ApiError(res.status, await res.text());
-    return res.json();
+    // Fail loudly after 60s rather than spinning forever if the request stalls.
+    const ctrl = new AbortController();
+    const timer = window.setTimeout(() => ctrl.abort(), 60000);
+    try {
+      const res = await fetch("/api/admin/import", {
+        method: "POST",
+        credentials: "include",
+        body: form,
+        signal: ctrl.signal,
+      });
+      if (!res.ok) throw new ApiError(res.status, await res.text());
+      return await res.json();
+    } catch (e) {
+      if (e instanceof DOMException && e.name === "AbortError") {
+        throw new ApiError(0, "Import timed out after 60s — check the server logs.");
+      }
+      throw e;
+    } finally {
+      window.clearTimeout(timer);
+    }
   },
   rebuildMen: (seed?: number) =>
     req<any>("/api/admin/men/rebuild", { method: "POST", body: JSON.stringify({ seed: seed ?? null }) }),

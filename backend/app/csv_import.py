@@ -221,12 +221,14 @@ def import_csv(db: Session, content: str) -> ImportReport:
     """
     parsed_rows, report = parse_and_dedup(content)
 
+    # Load every existing player once and index them in memory. Doing a query per
+    # row means hundreds of round-trips, which is slow against a remote DB.
+    existing_by_key: dict[tuple[str, Category], Player] = {
+        (p.dedup_key, p.category): p for p in db.query(Player).all()
+    }
+
     for pr in parsed_rows:
-        existing = (
-            db.query(Player)
-            .filter(Player.dedup_key == pr.dedup_key, Player.category == pr.category)
-            .one_or_none()
-        )
+        existing = existing_by_key.get((pr.dedup_key, pr.category))
         if existing is None:
             db.add(
                 Player(

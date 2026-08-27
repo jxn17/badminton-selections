@@ -30,7 +30,16 @@ export default function AdminToolbar({ tournament, category, onChanged }: Props)
       setMsg(ok ? ok(r) : "Done.");
       onChanged();
     } catch (e) {
-      setMsg(e instanceof ApiError ? `Error: ${JSON.stringify(e.detail)}` : "Failed.");
+      const detail = e instanceof ApiError ? e.detail : null;
+      const text =
+        typeof detail === "string"
+          ? detail
+          : detail && typeof detail === "object" && "message" in (detail as any)
+            ? (detail as any).message
+            : e instanceof Error
+              ? e.message
+              : "Failed.";
+      setMsg(`Error: ${text}`);
     } finally {
       setBusy(false);
     }
