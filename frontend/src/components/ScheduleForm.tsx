@@ -3,21 +3,33 @@ import { Category, api } from "../api";
 
 interface Target { category: Category; group: string | null }
 
-const PRESETS: { name: string; day: string; start: string; end: string; courts: string; targets: Target[] }[] = [
+interface Preset {
+  name: string; day: string; start: string; end: string; courts: string;
+  targets: Target[]; onlyUnscheduled?: boolean; note?: string;
+}
+
+const PRESETS: Preset[] = [
   {
-    name: "Saturday — Men A & B",
+    name: "Sat — Men A & B",
     day: "Sat", start: "17:00", end: "20:30", courts: "Court 1, Court 2",
     targets: [{ category: "men", group: "A" }, { category: "men", group: "B" }],
   },
   {
-    name: "Sunday — Men C & D",
+    name: "Sat — Women (court 3)",
+    day: "Sat", start: "17:00", end: "20:30", courts: "Court 3",
+    targets: [{ category: "women", group: null }],
+    note: "Run this FIRST. Paste any player who can't make Saturday below — their matches are held for Sunday.",
+  },
+  {
+    name: "Sun — Men C & D",
     day: "Sun", start: "09:00", end: "17:00", courts: "Court 1, Court 2",
     targets: [{ category: "men", group: "C" }, { category: "men", group: "D" }],
   },
   {
-    name: "Sunday — Women",
+    name: "Sun — Women (rest)",
     day: "Sun", start: "09:00", end: "17:00", courts: "Court 3",
-    targets: [{ category: "women", group: null }],
+    targets: [{ category: "women", group: null }], onlyUnscheduled: true,
+    note: "Run this AFTER the Saturday women pass. Keeps Saturday's times and fills in everything left over.",
   },
 ];
 
@@ -28,6 +40,7 @@ export default function ScheduleForm({ onDone }: { onDone: (msg: string) => void
   const [end, setEnd] = useState(PRESETS[0].end);
   const [courts, setCourts] = useState(PRESETS[0].courts);
   const [mins, setMins] = useState(8);
+  const [unavailable, setUnavailable] = useState("");
   const [busy, setBusy] = useState(false);
   const [report, setReport] = useState<any>(null);
 
@@ -47,6 +60,11 @@ export default function ScheduleForm({ onDone }: { onDone: (msg: string) => void
         day_label: day, start, end,
         courts: courtList(),
         minutes_per_match: mins,
+        unavailable_phones: unavailable
+          .split(/[\n,;]+/)
+          .map((x) => x.trim())
+          .filter(Boolean),
+        only_unscheduled: !!PRESETS[preset].onlyUnscheduled,
       });
       setReport(r);
       onDone(`Scheduled ${r.scheduled} of ${r.total_playable} matches.`);
@@ -78,6 +96,22 @@ export default function ScheduleForm({ onDone }: { onDone: (msg: string) => void
         ))}
       </div>
 
+      {PRESETS[preset].note && (
+        <p className="text-xs text-slate-500 bg-slate-50 rounded px-2 py-1.5 max-w-2xl">
+          {PRESETS[preset].note}
+        </p>
+      )}
+
+      <Field label="Can't play this day (phone numbers, one per line) — optional">
+        <textarea
+          value={unavailable}
+          onChange={(e) => setUnavailable(e.target.value)}
+          rows={3}
+          placeholder={"+91 90632 27011"}
+          className="w-full max-w-md rounded border border-slate-200 px-2 py-1 font-mono text-xs"
+        />
+      </Field>
+
       <div className="flex flex-wrap items-end gap-3">
         <Field label="Day label"><input value={day} onChange={(e)=>setDay(e.target.value)} className="w-20 rounded border border-slate-200 px-2 py-1" /></Field>
         <Field label="Start (24h)"><input value={start} onChange={(e)=>setStart(e.target.value)} className="w-20 rounded border border-slate-200 px-2 py-1" /></Field>
@@ -101,6 +135,15 @@ export default function ScheduleForm({ onDone }: { onDone: (msg: string) => void
           <div className="text-slate-500">
             Per round: {Object.entries(report.per_round).map(([r, n]) => `R${r}: ${n}`).join("  ")}
           </div>
+          {report.held_over > 0 && (
+            <div className="text-slate-600">
+              {report.held_over} match{report.held_over === 1 ? "" : "es"} held for another day
+              (a player is unavailable).
+            </div>
+          )}
+          {report.unknown_phones?.length > 0 && (
+            <div className="text-red-600">Unknown phone(s): {report.unknown_phones.join(", ")}</div>
+          )}
           {report.unscheduled > 0 && (
             <div className="text-amber-700 bg-amber-50 rounded px-2 py-1">
               ⚠ {report.unscheduled} later-round matches have no time — the day only fits{" "}

@@ -158,6 +158,10 @@ class ScheduleDayIn(BaseModel):
     end: str = "17:00"
     courts: list[str] = ["Court 1"]
     minutes_per_match: int = 12
+    # Players who can't play this day — their matches are held for another day.
+    unavailable_phones: list[str] = []
+    # Leave already-timed matches alone (use for the second day of a split draw).
+    only_unscheduled: bool = False
 
 
 class ClearScheduleIn(BaseModel):

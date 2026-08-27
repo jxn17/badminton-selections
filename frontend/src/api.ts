@@ -155,6 +155,8 @@ export const api = {
     end: string;
     courts: string[];
     minutes_per_match: number;
+    unavailable_phones?: string[];
+    only_unscheduled?: boolean;
   }) => req<any>("/api/admin/schedule-day", { method: "POST", body: JSON.stringify(body) }),
   clearSchedule: (targets: { category: Category; group: string | null }[]) =>
     req<any>("/api/admin/clear-schedule", { method: "POST", body: JSON.stringify({ targets }) }),

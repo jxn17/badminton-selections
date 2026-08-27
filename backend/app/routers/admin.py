@@ -245,6 +245,7 @@ def schedule_day_ep(
         result = schedule_day(
             db, targets, body.day_label, body.start, body.end,
             body.courts, body.minutes_per_match,
+            body.unavailable_phones, body.only_unscheduled,
         )
     except ScoringError as exc:
         _scoring_error(exc)

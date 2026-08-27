@@ -458,12 +458,19 @@ def schedule_day(
     end: str,
     courts: list[str],
     minutes_per_match: int,
+    unavailable_phones: list[str] | None = None,
+    only_unscheduled: bool = False,
 ) -> dict:
     """Assign times+courts to matches, earliest round first.
 
     Rounds are filled in order across all selected groups, so if the day runs
     out of time it is always the LATEST rounds that go unscheduled — never a
     half-finished early round. Byes are skipped (nothing to play).
+
+    `unavailable_phones` are players who cannot play on this day: any match
+    involving them is left for another day (useful when part of a draw is split
+    across two days). `only_unscheduled` leaves already-timed matches untouched,
+    so a second day can pick up exactly what the first could not fit.
     """
     if not targets:
         raise ScoringError("Pick at least one group to schedule.")
@@ -495,6 +502,21 @@ def schedule_day(
             raise ScoringError(f"No draw for {cat.value} {grp or ''}".strip() + ".")
         tournaments.append(t)
 
+    # Players who can't make this day -> their matches are held over.
+    blocked_ids: set[int] = set()
+    unknown_phones: list[str] = []
+    for raw in unavailable_phones or []:
+        norm = normalize_phone(raw)
+        p = (
+            db.query(Player).filter(Player.phone_normalized == norm).first()
+            if norm
+            else None
+        )
+        if p is None:
+            unknown_phones.append(raw)
+        else:
+            blocked_ids.add(p.id)
+
     # All playable matches, earliest round first, groups interleaved within a round.
     matches = (
         db.query(Match)
@@ -506,14 +528,27 @@ def schedule_day(
         .all()
     )
 
+    held_over = 0
+    playable = []
+    for m in matches:
+        if only_unscheduled and m.scheduled_time:
+            continue  # already has a time from an earlier day
+        if blocked_ids and (
+            m.player_a_id in blocked_ids or m.player_b_id in blocked_ids
+        ):
+            held_over += 1
+            continue  # someone in this match can't play today
+        playable.append(m)
+
     slots_total = ((end_min - start_min) // minutes_per_match) * len(courts)
     scheduled = 0
     per_round: dict[int, int] = {}
     last_time = None
 
-    for i, m in enumerate(matches):
+    for i, m in enumerate(playable):
         if i >= slots_total:
-            m.scheduled_time = None  # beyond the day's capacity
+            if not only_unscheduled:
+                m.scheduled_time = None  # beyond the day's capacity
             continue
         slot, court_idx = divmod(i, len(courts))
         t_min = start_min + slot * minutes_per_match
@@ -526,8 +561,10 @@ def schedule_day(
     db.commit()
     return {
         "scheduled": scheduled,
-        "unscheduled": max(0, len(matches) - scheduled),
-        "total_playable": len(matches),
+        "unscheduled": max(0, len(playable) - scheduled),
+        "held_over": held_over,
+        "unknown_phones": unknown_phones,
+        "total_playable": len(playable),
         "slots_available": slots_total,
         "per_round": {str(k): v for k, v in sorted(per_round.items())},
         "finishes_by": last_time,
