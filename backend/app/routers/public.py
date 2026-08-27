@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import func
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session, joinedload, selectinload
 
 from ..auth import current_admin_name
 from ..database import get_db
@@ -201,7 +201,10 @@ def get_bracket(
     cat = _parse_category(category)
     include_pii = current_admin_name(request) is not None
 
-    q = db.query(Tournament).filter(Tournament.category == cat)
+    # Pull the tournament and its scoring formats together — one round-trip
+    # instead of two, which matters when the DB is a network hop away.
+    q = db.query(Tournament).options(joinedload(Tournament.formats))
+    q = q.filter(Tournament.category == cat)
     if cat == Category.men:
         if not group:
             raise HTTPException(400, "Men's bracket requires a group (A–D).")
@@ -238,11 +241,10 @@ def get_bracket(
         .order_by(Match.round_number, Match.position_in_round)
         .all()
     )
-    formats = (
-        db.query(RoundFormat)
-        .filter(RoundFormat.tournament_id == tournament.id)
-        .order_by(RoundFormat.round_number.nullsfirst())
-        .all()
+    # Already loaded above; sort in Python (default first) rather than re-query.
+    formats = sorted(
+        tournament.formats,
+        key=lambda f: (f.round_number is not None, f.round_number or 0),
     )
     return BracketOut(
         tournament=TournamentOut.model_validate(tournament),
