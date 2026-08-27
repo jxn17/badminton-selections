@@ -39,8 +39,27 @@ app.include_router(admin.router)
 
 @app.on_event("startup")
 def on_startup() -> None:
-    # Schema is created on boot (no Alembic step needed for this event tool).
-    Base.metadata.create_all(bind=engine)
+    # Schema is created on boot. Wait for the DB to be reachable first — Railway's
+    # private networking (postgres.railway.internal) can be a few seconds slow on
+    # first boot, so we retry instead of crashing (which would fail the healthcheck).
+    import time
+
+    from sqlalchemy import text
+
+    last_err: Exception | None = None
+    for attempt in range(1, 31):  # ~ up to 60s
+        try:
+            with engine.connect() as conn:
+                conn.execute(text("SELECT 1"))
+            Base.metadata.create_all(bind=engine)
+            print(f"[startup] DB ready (attempt {attempt}); schema ensured.", flush=True)
+            return
+        except Exception as exc:  # noqa: BLE001
+            last_err = exc
+            print(f"[startup] DB not ready (attempt {attempt}): {exc}", flush=True)
+            time.sleep(2)
+    # Don't crash — start serving so /api/health passes and the error is visible.
+    print(f"[startup] WARNING: DB never became reachable: {last_err}", flush=True)
 
 
 # Serve the built frontend (single-origin deploy). In production the Docker image

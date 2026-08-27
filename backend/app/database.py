@@ -8,12 +8,19 @@ from .config import get_settings
 
 settings = get_settings()
 
-# For SQLite (used by the test suite) we need check_same_thread=False.
-connect_args = {}
+# For SQLite (used by the test suite) we need check_same_thread=False. For
+# Postgres, a short connect_timeout makes startup retries cycle quickly instead
+# of hanging on an unreachable host; pool_pre_ping recovers dropped connections.
 if settings.db_url.startswith("sqlite"):
     connect_args = {"check_same_thread": False}
-
-engine = create_engine(settings.db_url, connect_args=connect_args, future=True)
+    engine = create_engine(settings.db_url, connect_args=connect_args, future=True)
+else:
+    engine = create_engine(
+        settings.db_url,
+        connect_args={"connect_timeout": 10},
+        pool_pre_ping=True,
+        future=True,
+    )
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
 
 
