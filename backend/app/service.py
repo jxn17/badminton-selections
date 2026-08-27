@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import random
+import re
 
 from sqlalchemy.orm import Session
 
@@ -426,3 +427,137 @@ def move_players_to_groups(
         "failed": failed,
         "redrawn_groups": redrawn,
     }
+
+
+# --------------------------------------------------------------------------
+# Match scheduling: lay matches onto courts across a day's playing window
+# --------------------------------------------------------------------------
+def _parse_hhmm(value: str) -> int:
+    """'17:00' -> minutes since midnight."""
+    m = re.match(r"^\s*(\d{1,2}):(\d{2})\s*$", value or "")
+    if not m:
+        raise ScoringError(f"Time must look like 17:00, got {value!r}.")
+    h, mi = int(m.group(1)), int(m.group(2))
+    if not (0 <= h < 24 and 0 <= mi < 60):
+        raise ScoringError(f"Not a valid time: {value!r}.")
+    return h * 60 + mi
+
+
+def _fmt_hhmm(total: int) -> str:
+    h, m = divmod(total % (24 * 60), 60)
+    suffix = "am" if h < 12 else "pm"
+    h12 = h % 12 or 12
+    return f"{h12}:{m:02d}{suffix}"
+
+
+def schedule_day(
+    db: Session,
+    targets: list[dict],
+    day_label: str,
+    start: str,
+    end: str,
+    courts: list[str],
+    minutes_per_match: int,
+) -> dict:
+    """Assign times+courts to matches, earliest round first.
+
+    Rounds are filled in order across all selected groups, so if the day runs
+    out of time it is always the LATEST rounds that go unscheduled — never a
+    half-finished early round. Byes are skipped (nothing to play).
+    """
+    if not targets:
+        raise ScoringError("Pick at least one group to schedule.")
+    if not courts:
+        raise ScoringError("Need at least one court.")
+    if minutes_per_match < 1:
+        raise ScoringError("Minutes per match must be at least 1.")
+
+    start_min, end_min = _parse_hhmm(start), _parse_hhmm(end)
+    if end_min <= start_min:
+        raise ScoringError("End time must be after start time.")
+
+    # Collect the tournaments named by `targets`.
+    tournaments: list[Tournament] = []
+    for tgt in targets:
+        cat = Category(tgt["category"])
+        grp = tgt.get("group") or None
+        t = (
+            db.query(Tournament)
+            .filter(Tournament.category == cat)
+            .filter(
+                Tournament.group_label.is_(None)
+                if grp is None
+                else Tournament.group_label == grp
+            )
+            .one_or_none()
+        )
+        if t is None:
+            raise ScoringError(f"No draw for {cat.value} {grp or ''}".strip() + ".")
+        tournaments.append(t)
+
+    # All playable matches, earliest round first, groups interleaved within a round.
+    matches = (
+        db.query(Match)
+        .filter(
+            Match.tournament_id.in_([t.id for t in tournaments]),
+            Match.is_bye.is_(False),
+        )
+        .order_by(Match.round_number, Match.position_in_round, Match.tournament_id)
+        .all()
+    )
+
+    slots_total = ((end_min - start_min) // minutes_per_match) * len(courts)
+    scheduled = 0
+    per_round: dict[int, int] = {}
+    last_time = None
+
+    for i, m in enumerate(matches):
+        if i >= slots_total:
+            m.scheduled_time = None  # beyond the day's capacity
+            continue
+        slot, court_idx = divmod(i, len(courts))
+        t_min = start_min + slot * minutes_per_match
+        stamp = f"{day_label} {_fmt_hhmm(t_min)} {courts[court_idx]}".strip()
+        m.scheduled_time = stamp
+        scheduled += 1
+        per_round[m.round_number] = per_round.get(m.round_number, 0) + 1
+        last_time = _fmt_hhmm(t_min + minutes_per_match)
+
+    db.commit()
+    return {
+        "scheduled": scheduled,
+        "unscheduled": max(0, len(matches) - scheduled),
+        "total_playable": len(matches),
+        "slots_available": slots_total,
+        "per_round": {str(k): v for k, v in sorted(per_round.items())},
+        "finishes_by": last_time,
+        "courts": courts,
+        "minutes_per_match": minutes_per_match,
+    }
+
+
+def clear_schedule(db: Session, targets: list[dict]) -> dict:
+    """Wipe scheduled times for the given groups."""
+    ids = []
+    for tgt in targets:
+        cat = Category(tgt["category"])
+        grp = tgt.get("group") or None
+        t = (
+            db.query(Tournament)
+            .filter(Tournament.category == cat)
+            .filter(
+                Tournament.group_label.is_(None)
+                if grp is None
+                else Tournament.group_label == grp
+            )
+            .one_or_none()
+        )
+        if t is not None:
+            ids.append(t.id)
+    n = 0
+    for m in db.query(Match).filter(Match.tournament_id.in_(ids)).all():
+        if m.scheduled_time:
+            m.scheduled_time = None
+            n += 1
+    db.commit()
+    return {"cleared": n}

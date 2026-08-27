@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import { ApiError, Category, Tournament, api } from "../api";
 import ScoringSettings from "./ScoringSettings";
 import MoveToGroupForm from "./MoveToGroupForm";
+import ScheduleForm from "./ScheduleForm";
 
 interface Props {
   tournament: Tournament | null;
@@ -54,6 +55,7 @@ export default function AdminToolbar({ tournament, category, onChanged }: Props)
         <ToolbarBtn onClick={() => setOpen(open === "import" ? null : "import")}>Import CSV</ToolbarBtn>
         <ToolbarBtn onClick={() => setOpen(open === "walkin" ? null : "walkin")}>+ Walk-in player</ToolbarBtn>
         <ToolbarBtn onClick={() => setOpen(open === "move" ? null : "move")}>Move players to group</ToolbarBtn>
+        <ToolbarBtn onClick={() => setOpen(open === "sched" ? null : "sched")}>Set match times</ToolbarBtn>
         {tournament && tournament.bracket_size ? (
           locked ? (
             <ToolbarBtn onClick={() => run(() => api.unlock(tournament.id), () => "Unlocked.")} disabled={busy}>
@@ -121,6 +123,12 @@ export default function AdminToolbar({ tournament, category, onChanged }: Props)
       {open === "move" && (
         <Panel title="Move players to group" onClose={() => setOpen(null)}>
           <MoveToGroupForm onDone={(m) => { setMsg(m); onChanged(); }} />
+        </Panel>
+      )}
+
+      {open === "sched" && (
+        <Panel title="Set match times" onClose={() => setOpen(null)}>
+          <ScheduleForm onDone={(m) => { setMsg(m); onChanged(); }} />
         </Panel>
       )}
 

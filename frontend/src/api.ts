@@ -148,6 +148,16 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ phones, target_groups }),
     }),
+  scheduleDay: (body: {
+    targets: { category: Category; group: string | null }[];
+    day_label: string;
+    start: string;
+    end: string;
+    courts: string[];
+    minutes_per_match: number;
+  }) => req<any>("/api/admin/schedule-day", { method: "POST", body: JSON.stringify(body) }),
+  clearSchedule: (targets: { category: Category; group: string | null }[]) =>
+    req<any>("/api/admin/clear-schedule", { method: "POST", body: JSON.stringify({ targets }) }),
   removePlayer: (id: number) => req<{ removed: number; name: string }>(`/api/admin/players/${id}`, { method: "DELETE" }),
   bracket: (category: Category, group?: string | null) => {
     const q = new URLSearchParams({ category });

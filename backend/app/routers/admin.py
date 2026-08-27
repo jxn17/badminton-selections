@@ -20,15 +20,19 @@ from ..scoring import (
 )
 from ..service import (
     add_walkin,
+    clear_schedule,
     move_players_to_groups,
     rebuild_men,
     rebuild_women,
     remove_player,
+    schedule_day,
     swap_players,
 )
 from ..schemas import (
+    ClearScheduleIn,
     FlagIn,
     MoveToGroupIn,
+    ScheduleDayIn,
     GenerateDrawIn,
     RetireIn,
     RoundFormatIn,
@@ -225,6 +229,39 @@ def delete_player(player_id: int, db: Session = Depends(get_db), admin: str = De
     except ScoringError as exc:
         _scoring_error(exc)
     record(db, admin, "remove_player", "player", player_id, after=result)
+    db.commit()
+    return result
+
+
+@router.post("/schedule-day")
+def schedule_day_ep(
+    body: ScheduleDayIn,
+    db: Session = Depends(get_db),
+    admin: str = Depends(require_admin),
+):
+    """Auto-assign match times/courts for one day's play."""
+    targets = [{"category": t.category.value, "group": t.group} for t in body.targets]
+    try:
+        result = schedule_day(
+            db, targets, body.day_label, body.start, body.end,
+            body.courts, body.minutes_per_match,
+        )
+    except ScoringError as exc:
+        _scoring_error(exc)
+    record(db, admin, "schedule_day", "tournament", None, after=result)
+    db.commit()
+    return result
+
+
+@router.post("/clear-schedule")
+def clear_schedule_ep(
+    body: ClearScheduleIn,
+    db: Session = Depends(get_db),
+    admin: str = Depends(require_admin),
+):
+    targets = [{"category": t.category.value, "group": t.group} for t in body.targets]
+    result = clear_schedule(db, targets)
+    record(db, admin, "clear_schedule", "tournament", None, after=result)
     db.commit()
     return result
 

@@ -143,3 +143,22 @@ class MoveToGroupIn(BaseModel):
     """Move a set of players (by phone) into the given men's groups."""
     phones: list[str]
     target_groups: list[str]
+
+
+class ScheduleTarget(BaseModel):
+    category: Category
+    group: str | None = None
+
+
+class ScheduleDayIn(BaseModel):
+    """Lay matches onto courts across one day's playing window."""
+    targets: list[ScheduleTarget]
+    day_label: str = ""
+    start: str = "09:00"
+    end: str = "17:00"
+    courts: list[str] = ["Court 1"]
+    minutes_per_match: int = 12
+
+
+class ClearScheduleIn(BaseModel):
+    targets: list[ScheduleTarget]
