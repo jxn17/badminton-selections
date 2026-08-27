@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ApiError, Game, Match, Player, RoundFormat, api } from "../api";
 import { expTag, maxGames } from "../bracket";
 
@@ -40,7 +40,13 @@ export default function MatchCard({
   // server round-trip and bracket refetch land.
   const [flagOverride, setFlagOverride] = useState<Record<number, boolean>>({});
 
+  // True while this admin has unsaved edits in the score boxes. The bracket
+  // refetches every 15s; without this guard that refetch would wipe whatever is
+  // half-typed.
+  const dirtyRef = useRef(false);
+
   useEffect(() => {
+    if (dirtyRef.current) return; // keep the admin's in-progress input
     const next: CellPair[] = [];
     for (let i = 0; i < cols; i++) {
       const g = match.games.find((x) => x.game_number === i + 1);
@@ -64,6 +70,7 @@ export default function MatchCard({
     });
     try {
       await api.updateScore(match.id, games);
+      dirtyRef.current = false; // server now matches what's on screen
       onChanged();
     } catch (e) {
       if (e instanceof ApiError && e.detail && typeof e.detail === "object") {
@@ -134,7 +141,7 @@ export default function MatchCard({
     return hl ? "font-bold text-court" : "text-slate-500";
   }
 
-  const PlayerRow = ({ side, id }: { side: "a" | "b"; id: number | null }) => {
+  const playerRow = (side: "a" | "b", id: number | null) => {
     const p = id !== null ? players.get(id) ?? null : null;
     const isWinner = id !== null && id === winnerId;
     const isRetired = id !== null && id === retiredId;
@@ -211,10 +218,21 @@ export default function MatchCard({
                 inputMode="numeric"
                 value={side === "a" ? c.a : c.b}
                 onChange={(e) => {
-                  const v = e.target.value.replace(/[^0-9]/g, "");
+                  const v = e.target.value.replace(/[^0-9]/g, "").slice(0, 3);
+                  dirtyRef.current = true;
                   setCells((prev) => prev.map((pp, idx) => (idx === i ? { ...pp, [side]: v } : pp)) as CellPair[]);
                 }}
-                className={`w-8 text-center text-sm rounded border px-0.5 py-0.5 ${
+                onFocus={(e) => e.currentTarget.select()}
+                onBlur={() => {
+                  // Commit to the DB once the full score for this game is in,
+                  // rather than on every digit.
+                  const c = cells[i];
+                  if (dirtyRef.current && c && c.a !== "" && c.b !== "") save();
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+                }}
+                className={`w-10 text-center text-sm rounded border px-1 py-0.5 ${
                   errorGame === i + 1 ? "border-red-400 bg-red-50" : "border-slate-200"
                 }`}
                 aria-label={`game ${i + 1} score`}
@@ -232,9 +250,9 @@ export default function MatchCard({
 
   return (
     <div className={`bg-white rounded-lg border border-slate-200 shadow-sm ${wide ? "w-full" : "w-72"}`}>
-      <PlayerRow side="a" id={match.player_a_id} />
+      {playerRow("a", match.player_a_id)}
       <div className="border-t border-slate-100" />
-      <PlayerRow side="b" id={match.player_b_id} />
+      {playerRow("b", match.player_b_id)}
 
       {/* Schedule row */}
       {(editable || match.scheduled_time) && !match.is_bye && (
