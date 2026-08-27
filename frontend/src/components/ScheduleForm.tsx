@@ -27,7 +27,7 @@ export default function ScheduleForm({ onDone }: { onDone: (msg: string) => void
   const [start, setStart] = useState(PRESETS[0].start);
   const [end, setEnd] = useState(PRESETS[0].end);
   const [courts, setCourts] = useState(PRESETS[0].courts);
-  const [mins, setMins] = useState(12);
+  const [mins, setMins] = useState(8);
   const [busy, setBusy] = useState(false);
   const [report, setReport] = useState<any>(null);
 
