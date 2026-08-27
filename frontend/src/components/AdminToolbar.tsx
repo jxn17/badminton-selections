@@ -91,26 +91,55 @@ export default function AdminToolbar({ tournament, category, onChanged }: Props)
       </div>
 
       {open === "import" && (
-        <div className="border-t border-slate-100 pt-3 flex flex-wrap items-center gap-3">
-          <input ref={fileRef} type="file" accept=".csv" className="text-sm" />
-          <button
-            onClick={() => {
-              const f = fileRef.current?.files?.[0];
-              if (!f) return setMsg("Choose a CSV first.");
-              run(() => api.importCsv(f), (r) => `Imported: ${JSON.stringify(r.per_category_counts)} · dupes ${r.duplicates_dropped} · skipped ${r.skipped_invalid}. Now rebuild the draws.`);
-            }}
-            disabled={busy}
-            className="bg-court text-white px-3 py-1.5 rounded text-sm"
-          >
-            Upload & import
-          </button>
-          <span className="text-xs text-slate-400">Idempotent. After importing, click “Rebuild men” and “Rebuild women”.</span>
-        </div>
+        <Panel title="Import CSV" onClose={() => setOpen(null)}>
+          <div className="flex flex-wrap items-center gap-3">
+            <input ref={fileRef} type="file" accept=".csv" className="text-sm" />
+            <button
+              onClick={() => {
+                const f = fileRef.current?.files?.[0];
+                if (!f) return setMsg("Choose a CSV first.");
+                run(() => api.importCsv(f), (r) => `Imported: ${JSON.stringify(r.per_category_counts)} · dupes ${r.duplicates_dropped} · skipped ${r.skipped_invalid}. Now rebuild the draws.`);
+              }}
+              disabled={busy}
+              className="bg-court text-white px-3 py-1.5 rounded text-sm"
+            >
+              Upload & import
+            </button>
+            <span className="text-xs text-slate-400">Idempotent. After importing, click “Rebuild men” and “Rebuild women”.</span>
+          </div>
+        </Panel>
       )}
 
-      {open === "walkin" && <WalkinForm category={category} onDone={(m) => { setMsg(m); onChanged(); }} />}
+      {open === "walkin" && (
+        <Panel title="Add walk-in player" onClose={() => setOpen(null)}>
+          <WalkinForm category={category} onDone={(m) => { setMsg(m); onChanged(); }} />
+        </Panel>
+      )}
 
-      {open === "scoring" && tournament && <ScoringSettings tournamentId={tournament.id} />}
+      {open === "scoring" && tournament && (
+        <Panel title="Scoring settings" onClose={() => setOpen(null)}>
+          <ScoringSettings tournamentId={tournament.id} />
+        </Panel>
+      )}
+    </div>
+  );
+}
+
+function Panel({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
+  return (
+    <div className="border-t border-slate-100 pt-3">
+      <div className="flex items-center justify-between mb-2">
+        <span className="text-xs font-semibold text-slate-500 uppercase tracking-wide">{title}</span>
+        <button
+          onClick={onClose}
+          className="text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-full w-5 h-5 flex items-center justify-center text-sm leading-none"
+          title="Close"
+          aria-label="Close"
+        >
+          ✕
+        </button>
+      </div>
+      {children}
     </div>
   );
 }
@@ -157,7 +186,7 @@ function WalkinForm({ category, onDone }: { category: Category; onDone: (msg: st
   }
 
   return (
-    <div className="border-t border-slate-100 pt-3 flex flex-wrap items-end gap-2 text-sm">
+    <div className="flex flex-wrap items-end gap-2 text-sm">
       <label className="flex flex-col gap-1 text-xs text-slate-500">
         Name
         <input value={name} onChange={(e) => setName(e.target.value)} className="w-44 rounded border border-slate-200 px-2 py-1" />

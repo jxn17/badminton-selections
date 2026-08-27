@@ -23,6 +23,7 @@ export default function App() {
   const [view, setView] = useState<"bracket" | "flagged">("bracket");
   const [flaggedCount, setFlaggedCount] = useState(0);
   const timer = useRef<number | null>(null);
+  const selRef = useRef<Selection | null>(null);
 
   const loadGroups = useCallback(async () => {
     try {
@@ -30,12 +31,16 @@ export default function App() {
     } catch {
       /* ignore */
     }
-    try {
-      setFlaggedCount((await api.flagged()).length);
-    } catch {
-      /* ignore */
+    // Flagged is admin-only server-side; skip the round-trip entirely for
+    // public visitors instead of firing it and eating a guaranteed 401.
+    if (auth.isAdmin) {
+      try {
+        setFlaggedCount((await api.flagged()).length);
+      } catch {
+        /* ignore */
+      }
     }
-  }, []);
+  }, [auth.isAdmin]);
 
   useEffect(() => {
     loadGroups();
@@ -52,13 +57,18 @@ export default function App() {
   const loadBracket = useCallback(async (s: Selection) => {
     setLoading(true);
     try {
-      setData(await api.bracket(s.category, s.group));
+      const next = await api.bracket(s.category, s.group);
+      // Ignore a stale response if the admin switched groups again mid-flight.
+      if (selRef.current?.category === s.category && selRef.current?.group === s.group) {
+        setData(next);
+      }
     } finally {
       setLoading(false);
     }
   }, []);
 
   useEffect(() => {
+    selRef.current = sel;
     if (sel) loadBracket(sel);
   }, [sel, loadBracket]);
 
@@ -130,6 +140,8 @@ export default function App() {
       </header>
 
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 py-5">
+        {/* Search + group tabs + admin toolbar stay pinned while the bracket scrolls. */}
+        <div className="sticky top-[57px] z-10 bg-slate-50 pt-1 pb-3 -mx-4 px-4 border-b border-slate-200">
         {/* Player search */}
         <div className="mb-4">
           <SearchBar
@@ -205,25 +217,29 @@ export default function App() {
           ) : null}
         </div>
 
+        {view === "bracket" && auth.isAdmin && (
+          <AdminToolbar tournament={t ?? null} category={sel?.category ?? "men"} onChanged={refresh} />
+        )}
+        </div>
+
         {view === "flagged" ? (
-          <div className="mt-2">
+          <div className="mt-4">
             <div className="text-sm text-slate-500 mb-3">Shortlisted players (flagged ⭐ from the brackets)</div>
             <FlaggedList editable={auth.isAdmin} onChanged={refresh} />
           </div>
         ) : (
           <>
-            {auth.isAdmin && (
-              <AdminToolbar tournament={t ?? null} category={sel?.category ?? "men"} onChanged={refresh} />
-            )}
-
-            {loading && <div className="py-16 text-center text-slate-400">Loading…</div>}
-            {!loading && data && (
-              <div className="mt-4">
+            {/* Keep the current bracket on screen while the next one loads, so
+                switching groups never flashes an empty "Loading…" screen. */}
+            {data ? (
+              <div className={`mt-4 transition-opacity ${loading ? "opacity-60" : "opacity-100"}`}>
                 <div className="text-sm text-slate-500 mb-2">
                   {sel?.category === "men" ? `Men's — Group ${sel?.group}` : "Women's"} · {data.players.length} players
                 </div>
                 <Bracket data={data} editable={auth.isAdmin} onChanged={refresh} />
               </div>
+            ) : (
+              loading && <div className="py-16 text-center text-slate-400">Loading…</div>
             )}
           </>
         )}

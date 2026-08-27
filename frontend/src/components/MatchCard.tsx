@@ -36,6 +36,9 @@ export default function MatchCard({
   const [errorGame, setErrorGame] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
   const [time, setTime] = useState(match.scheduled_time ?? "");
+  // Local override so the star flips the instant it is clicked, before the
+  // server round-trip and bracket refetch land.
+  const [flagOverride, setFlagOverride] = useState<Record<number, boolean>>({});
 
   useEffect(() => {
     const next: CellPair[] = [];
@@ -96,12 +99,20 @@ export default function MatchCard({
   }
 
   async function toggleFlag(p: Player) {
+    const next = !isFlagged(p);
+    setFlagOverride((prev) => ({ ...prev, [p.id]: next }));
     try {
-      await api.flagPlayer(p.id, !p.flagged);
+      await api.flagPlayer(p.id, next);
       onChanged();
     } catch (e) {
+      // Roll the star back if the server rejected it.
+      setFlagOverride((prev) => ({ ...prev, [p.id]: !next }));
       setError(e instanceof Error ? e.message : "Failed.");
     }
+  }
+
+  function isFlagged(p: Player): boolean {
+    return flagOverride[p.id] ?? p.flagged;
   }
 
   async function saveTime() {
@@ -148,7 +159,6 @@ export default function MatchCard({
             >
               {isByeSlot ? <span className="text-slate-400 italic">Bye</span> : p ? p.full_name : "TBD"}
             </button>
-            {editable && p?.flagged && <span title={p.flag_note ?? "Shortlisted"}>⭐</span>}
             {p?.is_walkin && (
               <span className="text-[9px] uppercase bg-purple-100 text-purple-700 px-1 rounded">spot</span>
             )}
@@ -185,8 +195,12 @@ export default function MatchCard({
           <span className="text-[10px] font-semibold text-slate-600 bg-slate-100 px-1.5 py-0.5 rounded">BYE</span>
         )}
         {editable && p && (
-          <button onClick={() => toggleFlag(p)} title="Flag / shortlist" className="text-xs opacity-60 hover:opacity-100">
-            {p.flagged ? "★" : "☆"}
+          <button
+            onClick={() => toggleFlag(p)}
+            title="Flag / shortlist"
+            className={`text-lg leading-none px-0.5 ${isFlagged(p) ? "text-amber-500" : "text-slate-300 hover:text-amber-400"}`}
+          >
+            {isFlagged(p) ? "★" : "☆"}
           </button>
         )}
         <div className="flex gap-1">

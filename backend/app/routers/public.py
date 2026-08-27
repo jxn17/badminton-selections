@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from sqlalchemy.orm import Session
+from sqlalchemy import func
+from sqlalchemy.orm import Session, selectinload
 
 from ..auth import current_admin_name
 from ..database import get_db
@@ -84,20 +85,33 @@ def search_players(request: Request, q: str = "", db: Session = Depends(get_db))
     tournaments = {(t.category, t.group_label): t for t in db.query(Tournament).all()}
     name_of = {p.id: p.full_name for p in db.query(Player).all()}
 
+    # One Match query for every found player, instead of one query per player
+    # (was an N+1 that scaled with the number of search results).
+    tournament_ids = {t.id for t in tournaments.values()}
+    player_ids = {p.id for p in players}
+    all_matches = (
+        db.query(Match)
+        .filter(
+            Match.tournament_id.in_(tournament_ids),
+            (Match.player_a_id.in_(player_ids)) | (Match.player_b_id.in_(player_ids)),
+        )
+        .order_by(Match.round_number)
+        .all()
+        if tournament_ids and player_ids
+        else []
+    )
+    matches_by_player: dict[int, list[Match]] = {}
+    for m in all_matches:
+        for pid in (m.player_a_id, m.player_b_id):
+            if pid in player_ids:
+                matches_by_player.setdefault(pid, []).append(m)
+
     results = []
     for p in players:
         t = tournaments.get((p.category, p.group_label))
         match_infos = []
         if t is not None:
-            matches = (
-                db.query(Match)
-                .filter(
-                    Match.tournament_id == t.id,
-                    (Match.player_a_id == p.id) | (Match.player_b_id == p.id),
-                )
-                .order_by(Match.round_number)
-                .all()
-            )
+            matches = matches_by_player.get(p.id, [])
             for m in matches:
                 opp_id = m.player_b_id if m.player_a_id == p.id else m.player_a_id
                 if m.is_bye:
@@ -152,26 +166,29 @@ def flagged_players(request: Request, db: Session = Depends(get_db)):
 
 @router.get("/groups", response_model=list[GroupSummary])
 def list_groups(db: Session = Depends(get_db)):
-    """All tournaments (women + men A–D) for the navbar."""
-    out: list[GroupSummary] = []
+    """All tournaments (women + men A–D) for the navbar.
+
+    Two queries total (not one .count() per tournament) — this is on the hot
+    path (it reloads after every admin action), so N+1 here is felt directly.
+    """
     tournaments = db.query(Tournament).order_by(Tournament.category, Tournament.group_label).all()
-    for t in tournaments:
-        q = db.query(Player).filter(Player.category == t.category)
-        if t.group_label is None:
-            q = q.filter(Player.group_label.is_(None))
-        else:
-            q = q.filter(Player.group_label == t.group_label)
-        out.append(
-            GroupSummary(
-                group_label=t.group_label,
-                category=t.category,
-                status=t.status,
-                player_count=q.count(),
-                bracket_size=t.bracket_size,
-                num_byes=t.num_byes,
-            )
+    counts_by_key = {
+        (cat, grp): cnt
+        for cat, grp, cnt in db.query(
+            Player.category, Player.group_label, func.count(Player.id)
+        ).group_by(Player.category, Player.group_label)
+    }
+    return [
+        GroupSummary(
+            group_label=t.group_label,
+            category=t.category,
+            status=t.status,
+            player_count=counts_by_key.get((t.category, t.group_label), 0),
+            bracket_size=t.bracket_size,
+            num_byes=t.num_byes,
         )
-    return out
+        for t in tournaments
+    ]
 
 
 @router.get("/bracket", response_model=BracketOut)
@@ -211,8 +228,12 @@ def get_bracket(
             formats=[],
         )
 
+    # selectinload pulls every match's games in ONE extra query. Without it
+    # SQLAlchemy lazy-loads games per match (~63 extra round-trips per bracket),
+    # which is barely noticeable locally but seconds of latency against a remote DB.
     matches = (
         db.query(Match)
+        .options(selectinload(Match.games))
         .filter(Match.tournament_id == tournament.id)
         .order_by(Match.round_number, Match.position_in_round)
         .all()
