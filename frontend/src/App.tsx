@@ -89,6 +89,12 @@ export default function App() {
     loadGroups();
   }, [sel, loadBracket, loadGroups]);
 
+  // Picking a group always shows that bracket, including from the Shortlist view.
+  const pickGroup = useCallback((g: GroupSummary) => {
+    setView("bracket");
+    setSel(selectionFor(g));
+  }, []);
+
   // The shortlist is admin-only; drop back to the bracket if an admin signs out.
   useEffect(() => {
     if (!auth.isAdmin && view === "flagged") setView("bracket");
@@ -149,10 +155,7 @@ export default function App() {
             onChanged={refresh}
             onPick={(category, group) => {
               const g = groups.find((x) => x.category === category && x.group_label === group);
-              if (g) {
-                setView("bracket");
-                setSel(selectionFor(g));
-              }
+              if (g) pickGroup(g);
             }}
           />
         </div>
@@ -165,7 +168,7 @@ export default function App() {
               <TabButton
                 key={g.group_label}
                 active={sel?.category === "men" && sel?.group === g.group_label}
-                onClick={() => setSel(selectionFor(g))}
+                onClick={() => pickGroup(g)}
                 locked={g.status === "locked"}
               >
                 {g.group_label}
@@ -180,7 +183,7 @@ export default function App() {
             {womenGroup ? (
               <TabButton
                 active={sel?.category === "women"}
-                onClick={() => setSel(selectionFor(womenGroup))}
+                onClick={() => pickGroup(womenGroup)}
                 locked={womenGroup.status === "locked"}
               >
                 Main<span className="ml-1 text-[10px] opacity-70">{womenGroup.player_count}</span>
