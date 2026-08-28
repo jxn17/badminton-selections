@@ -344,3 +344,16 @@ def test_noshow_toggle_off_reverts(db):
     slot_is_a = m.position_in_round % 2 == 0
     assert (nxt.player_a_id if slot_is_a else nxt.player_b_id) is None
 
+
+def test_noshow_prevent_scoring(db):
+    t = _setup(db, n=8, seed=3)
+    r1 = _round(db, t, 1)
+    m = next(m for m in r1 if not m.is_bye)
+    p_noshow = db.get(Player, m.player_a_id)
+
+    p_noshow.no_show = True
+    db.commit()
+
+    with pytest.raises(ScoringError):
+        apply_scores(db, m, [GameInput(1, 15, 9)], "admin@test.dev")
+

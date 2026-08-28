@@ -64,6 +64,10 @@ export default function MatchCard({
   // half-typed.
   const dirtyRef = useRef(false);
 
+  const playerA = match.player_a_id ? players.get(match.player_a_id) ?? null : null;
+  const playerB = match.player_b_id ? players.get(match.player_b_id) ?? null : null;
+  const hasNoShow = !!((playerA && (noShowOverride[playerA.id] ?? playerA.no_show)) || (playerB && (noShowOverride[playerB.id] ?? playerB.no_show)));
+
   useEffect(() => {
     if (dirtyRef.current) return; // keep the admin's in-progress input
     const next: CellPair[] = [];
@@ -266,6 +270,7 @@ export default function MatchCard({
                 key={i}
                 inputMode="numeric"
                 value={side === "a" ? c.a : c.b}
+                disabled={hasNoShow}
                 onChange={(e) => {
                   const v = e.target.value.replace(/[^0-9]/g, "").slice(0, 3);
                   dirtyRef.current = true;
@@ -337,7 +342,7 @@ export default function MatchCard({
           <div className="flex flex-wrap items-center gap-1.5">
             <button
               onClick={save}
-              disabled={saving || match.player_a_id === null || match.player_b_id === null}
+              disabled={saving || match.player_a_id === null || match.player_b_id === null || hasNoShow}
               className="text-xs bg-court text-white px-2 py-1 rounded disabled:opacity-40"
             >
               {saving ? "…" : "Save"}

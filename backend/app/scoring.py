@@ -307,6 +307,8 @@ def apply_scores(
         raise ScoringError("Bye matches are decided automatically and cannot be scored.")
     if match.player_a_id is None or match.player_b_id is None:
         raise ScoringError("Both players must be present before scores can be entered.")
+    if (match.player_a and match.player_a.no_show) or (match.player_b and match.player_b.no_show):
+        raise ScoringError("Cannot enter scores for a match involving a no-show player.")
 
     fmt = resolve_format(db, match.tournament, match.round_number)
     new_winner, _ = _match_winner_from_games(match, fmt, games)
