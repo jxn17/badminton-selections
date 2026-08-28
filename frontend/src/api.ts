@@ -14,6 +14,7 @@ export interface Player {
   flagged: boolean;
   flag_note: string | null;
   no_show: boolean;
+  reported: boolean;
   phone: string | null;
   registration_number: string | null;
 }
