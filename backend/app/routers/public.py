@@ -20,9 +20,9 @@ from ..schemas import (
 router = APIRouter(prefix="/api", tags=["public"])
 
 
-def player_out(p: Player, include_pii: bool) -> PlayerOut:
-    # include_pii is true only for signed-in admins. Phone, registration AND the
-    # shortlist flag are all admin-only — never exposed to the public.
+def player_out(p: Player, include_admin_fields: bool) -> PlayerOut:
+    # Phone is public so players can contact each other. Shortlist / no-show /
+    # registration stay admin-only.
     return PlayerOut(
         id=p.id,
         full_name=p.full_name,
@@ -31,11 +31,11 @@ def player_out(p: Player, include_pii: bool) -> PlayerOut:
         experience_level=p.experience_level,
         year_of_study=p.year_of_study,
         is_walkin=p.is_walkin,
-        flagged=(p.flagged if include_pii else False),
-        flag_note=(p.flag_note if include_pii else None),
-        # Normalized = clean last-10-digits (drops +91 / spaces / leading 0).
-        phone=(p.phone_normalized if include_pii else None),
-        registration_number=(p.registration_number if include_pii else None),
+        flagged=(p.flagged if include_admin_fields else False),
+        flag_note=(p.flag_note if include_admin_fields else None),
+        no_show=(p.no_show if include_admin_fields else False),
+        phone=p.phone_normalized,
+        registration_number=(p.registration_number if include_admin_fields else None),
     )
 
 
@@ -68,7 +68,7 @@ def _round_name(round_number: int, bracket_size: int | None) -> str:
 @router.get("/search")
 def search_players(request: Request, q: str = "", db: Session = Depends(get_db)):
     """Find players by name; return their group, opponent(s), and match time(s)."""
-    include_pii = current_admin_name(request) is not None
+    is_admin = current_admin_name(request) is not None
     q = (q or "").strip()
     if len(q) < 2:
         return []
@@ -142,7 +142,7 @@ def search_players(request: Request, q: str = "", db: Session = Depends(get_db))
                 "category": p.category.value,
                 "group_label": p.group_label,
                 "experience_level": p.experience_level,
-                "phone": p.phone_normalized if include_pii else None,
+                "phone": p.phone_normalized,
                 "matches": match_infos,
             }
         )
@@ -150,18 +150,35 @@ def search_players(request: Request, q: str = "", db: Session = Depends(get_db))
 
 
 @router.get("/flagged", response_model=list[PlayerOut])
-def flagged_players(request: Request, db: Session = Depends(get_db)):
+def flagged_players(
+    request: Request,
+    category: str | None = None,
+    db: Session = Depends(get_db),
+):
     """All ⭐ shortlisted players. Admin-only — the shortlist is not public."""
     if current_admin_name(request) is None:
         raise HTTPException(401, "Admin login required.")
-    include_pii = True
-    ps = (
-        db.query(Player)
-        .filter(Player.flagged.is_(True))
-        .order_by(Player.category, Player.group_label.nullsfirst(), Player.full_name)
-        .all()
-    )
-    return [player_out(p, include_pii) for p in ps]
+    q = db.query(Player).filter(Player.flagged.is_(True))
+    if category:
+        q = q.filter(Player.category == _parse_category(category))
+    ps = q.order_by(Player.category, Player.group_label.nullsfirst(), Player.full_name).all()
+    return [player_out(p, True) for p in ps]
+
+
+@router.get("/roster", response_model=list[PlayerOut])
+def roster_players(
+    request: Request,
+    category: str | None = None,
+    db: Session = Depends(get_db),
+):
+    """Full entrant roster with phone numbers. Admin-only."""
+    if current_admin_name(request) is None:
+        raise HTTPException(401, "Admin login required.")
+    q = db.query(Player)
+    if category:
+        q = q.filter(Player.category == _parse_category(category))
+    ps = q.order_by(Player.category, Player.group_label.nullsfirst(), Player.full_name).all()
+    return [player_out(p, True) for p in ps]
 
 
 @router.get("/groups", response_model=list[GroupSummary])
@@ -199,7 +216,7 @@ def get_bracket(
     db: Session = Depends(get_db),
 ):
     cat = _parse_category(category)
-    include_pii = current_admin_name(request) is not None
+    is_admin = current_admin_name(request) is not None
 
     # Pull the tournament and its scoring formats together — one round-trip
     # instead of two, which matters when the DB is a network hop away.
@@ -226,7 +243,7 @@ def get_bracket(
                 id=0, category=cat, group_label=group, status="draft",
                 draw_seed=None, bracket_size=None, num_byes=None,
             ),
-            players=[player_out(p, include_pii) for p in players],
+            players=[player_out(p, is_admin) for p in players],
             matches=[],
             formats=[],
         )
@@ -248,7 +265,7 @@ def get_bracket(
     )
     return BracketOut(
         tournament=TournamentOut.model_validate(tournament),
-        players=[player_out(p, include_pii) for p in players],
+        players=[player_out(p, is_admin) for p in players],
         matches=[MatchOut.model_validate(m) for m in matches],
         formats=[RoundFormatOut.model_validate(f) for f in formats],
     )

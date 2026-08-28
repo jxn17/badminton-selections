@@ -15,6 +15,7 @@ WORKDIR /app
 COPY backend/requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 COPY backend/ ./
+COPY women_entries/ ./women_entries/
 # FastAPI serves this directory as the SPA (see app/main.py).
 COPY --from=frontend /fe/dist ./static
 

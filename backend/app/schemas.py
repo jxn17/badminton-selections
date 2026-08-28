@@ -1,7 +1,7 @@
 """Pydantic v2 request/response models.
 
-Phone and registration number are populated ONLY for logged-in admins (the
-router decides); the public bracket never carries them.
+Phone numbers are public on bracket/search responses. Registration, shortlist,
+and no-show fields are admin-only (the router decides).
 """
 from __future__ import annotations
 
@@ -21,8 +21,9 @@ class PlayerOut(BaseModel):
     is_walkin: bool = False
     flagged: bool = False
     flag_note: str | None = None
-    # Admin-only (null on public responses):
+    no_show: bool = False
     phone: str | None = None
+    # Admin-only (null on public responses):
     registration_number: str | None = None
 
 
@@ -54,6 +55,7 @@ class RoundFormatOut(BaseModel):
     id: int
     round_number: int | None
     points_to_win: int
+    alt_points_to_win: int | None = None
     win_by_two: bool
     hard_cap: int | None
     games_to_win_match: int
@@ -115,6 +117,10 @@ class FlagIn(BaseModel):
     note: str | None = None
 
 
+class NoShowIn(BaseModel):
+    no_show: bool
+
+
 class SwapIn(BaseModel):
     player_x_id: int
     player_y_id: int
@@ -130,6 +136,7 @@ class WalkinIn(BaseModel):
 class RoundFormatIn(BaseModel):
     round_number: int | None = None
     points_to_win: int = 21
+    alt_points_to_win: int | None = 11
     win_by_two: bool = True
     hard_cap: int | None = 30
     games_to_win_match: int = 1

@@ -4,6 +4,7 @@ import { RoundFormat, api } from "../api";
 const EMPTY: Omit<RoundFormat, "id"> = {
   round_number: null,
   points_to_win: 21,
+  alt_points_to_win: 11,
   win_by_two: true,
   hard_cap: 30,
   games_to_win_match: 1,
@@ -56,6 +57,7 @@ export default function ScoringSettings({ tournamentId }: { tournamentId: number
             <tr>
               <th className="py-1 pr-4">Round</th>
               <th className="py-1 pr-4">Points</th>
+              <th className="py-1 pr-4">Alt</th>
               <th className="py-1 pr-4">Win by 2</th>
               <th className="py-1 pr-4">Cap</th>
               <th className="py-1 pr-4">Games</th>
@@ -67,6 +69,7 @@ export default function ScoringSettings({ tournamentId }: { tournamentId: number
               <tr key={f.id} className="border-t border-slate-100">
                 <td className="py-1.5 pr-4">{f.round_number === null ? "All" : f.round_number}</td>
                 <td className="py-1.5 pr-4">{f.points_to_win}</td>
+                <td className="py-1.5 pr-4">{f.alt_points_to_win ?? "—"}</td>
                 <td className="py-1.5 pr-4">{f.win_by_two ? "yes" : "no"}</td>
                 <td className="py-1.5 pr-4">{f.hard_cap ?? "—"}</td>
                 <td className="py-1.5 pr-4">{f.games_to_win_match}</td>
@@ -93,6 +96,9 @@ export default function ScoringSettings({ tournamentId }: { tournamentId: number
         </Field>
         <Field label="Points">
           <input type="number" className="w-20 rounded border border-slate-200 px-2 py-1" value={draft.points_to_win} onChange={(e) => setDraft({ ...draft, points_to_win: Number(e.target.value) })} />
+        </Field>
+        <Field label="Alt points">
+          <input type="number" className="w-20 rounded border border-slate-200 px-2 py-1" value={draft.alt_points_to_win ?? ""} onChange={(e) => setDraft({ ...draft, alt_points_to_win: e.target.value === "" ? null : Number(e.target.value) })} placeholder="none" />
         </Field>
         <label className="flex items-center gap-1.5 pb-1.5">
           <input type="checkbox" checked={draft.win_by_two} onChange={(e) => setDraft({ ...draft, win_by_two: e.target.checked })} />

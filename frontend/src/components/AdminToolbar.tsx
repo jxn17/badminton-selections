@@ -23,7 +23,8 @@ export default function AdminToolbar({ tournament, category, onChanged }: Props)
   const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
-  const fileRef = useRef<HTMLInputElement>(null);
+  const menFileRef = useRef<HTMLInputElement>(null);
+  const womenFileRef = useRef<HTMLInputElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
   // Close the menu on outside click or Escape (matters most on touch screens).
@@ -75,6 +76,23 @@ export default function AdminToolbar({ tournament, category, onChanged }: Props)
     } finally {
       setBusy(false);
     }
+  }
+
+  function importMessage(category: Category, r: any) {
+    const groups = r.explicit_men_groups ? Object.keys(r.explicit_men_groups) : [];
+    if (category === "men" && groups.length) {
+      return `Men imported: ${r.per_category_counts.men} · groups created: ${groups.map((g) => `Group ${g}`).join(", ")}.`;
+    }
+    if (category === "men") {
+      return `Men imported: ${r.per_category_counts.men} · draw rebuilt.`;
+    }
+    return `Women imported: ${r.per_category_counts.women} · draw rebuilt.`;
+  }
+
+  function uploadCsv(category: Category, ref: React.RefObject<HTMLInputElement>) {
+    const f = ref.current?.files?.[0];
+    if (!f) return setMsg(`Choose a ${category === "men" ? "men's" : "women's"} CSV first.`);
+    run(() => api.importCsv(f, category), (r) => importMessage(category, r));
   }
 
   const locked = tournament?.status === "locked";
@@ -172,25 +190,49 @@ export default function AdminToolbar({ tournament, category, onChanged }: Props)
           )}
         </div>
 
+        <button
+          onClick={() => setOpen((cur) => (cur === "import" ? null : "import"))}
+          className={`text-sm px-3 py-2 rounded-md border ${
+            open === "import" ? "bg-court text-white border-court" : "border-slate-300 text-slate-700 bg-white hover:bg-slate-50"
+          }`}
+        >
+          Import CSV draw
+        </button>
+
         {msg && <span className="text-xs text-slate-500 flex-1 min-w-0">{msg}</span>}
       </div>
 
       {open === "import" && (
-        <Panel title="Import CSV" onClose={() => setOpen(null)}>
-          <div className="flex flex-wrap items-center gap-3">
-            <input ref={fileRef} type="file" accept=".csv" className="text-sm" />
-            <button
-              onClick={() => {
-                const f = fileRef.current?.files?.[0];
-                if (!f) return setMsg("Choose a CSV first.");
-                run(() => api.importCsv(f), (r) => `Imported: ${JSON.stringify(r.per_category_counts)} · dupes ${r.duplicates_dropped} · skipped ${r.skipped_invalid}. Now rebuild the draws.`);
-              }}
-              disabled={busy}
-              className="bg-court text-white px-3 py-1.5 rounded text-sm"
-            >
-              Upload & import
-            </button>
-            <span className="text-xs text-slate-400">Idempotent. After importing, click “Rebuild men” and “Rebuild women”.</span>
+        <Panel title="Import CSV draws" onClose={() => setOpen(null)}>
+          <div className="grid gap-3">
+            <div className="flex flex-wrap items-center gap-3">
+              <span className="w-16 text-sm font-medium text-slate-700">Men</span>
+              <input ref={menFileRef} type="file" accept=".csv" className="text-sm" />
+              <button
+                onClick={() => uploadCsv("men", menFileRef)}
+                disabled={busy}
+                className="bg-court text-white px-3 py-1.5 rounded text-sm"
+              >
+                Upload men CSV
+              </button>
+              <span className="text-xs text-slate-400">
+                Blank lines create Group A, then Group B, and so on.
+              </span>
+            </div>
+            <div className="flex flex-wrap items-center gap-3">
+              <span className="w-16 text-sm font-medium text-slate-700">Women</span>
+              <input ref={womenFileRef} type="file" accept=".csv" className="text-sm" />
+              <button
+                onClick={() => uploadCsv("women", womenFileRef)}
+                disabled={busy}
+                className="bg-court text-white px-3 py-1.5 rounded text-sm"
+              >
+                Upload women CSV
+              </button>
+              <span className="text-xs text-slate-400">
+                Imported into the women's main draw.
+              </span>
+            </div>
           </div>
         </Panel>
       )}

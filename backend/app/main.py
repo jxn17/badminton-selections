@@ -52,6 +52,22 @@ def on_startup() -> None:
             with engine.connect() as conn:
                 conn.execute(text("SELECT 1"))
             Base.metadata.create_all(bind=engine)
+            # Lightweight migrations for columns added after first deploy.
+            if not settings.db_url.startswith("sqlite"):
+                with engine.connect() as conn:
+                    conn.execute(text(
+                        "ALTER TABLE players ADD COLUMN IF NOT EXISTS no_show BOOLEAN NOT NULL DEFAULT FALSE"
+                    ))
+                    conn.execute(text(
+                        "ALTER TABLE round_formats ADD COLUMN IF NOT EXISTS alt_points_to_win INTEGER"
+                    ))
+                    # Backfill: set alt=11 on existing rows that have primary=21 so
+                    # dual-target scoring works out of the box.
+                    conn.execute(text(
+                        "UPDATE round_formats SET alt_points_to_win = 11 "
+                        "WHERE alt_points_to_win IS NULL AND points_to_win = 21"
+                    ))
+                    conn.commit()
             print(f"[startup] DB ready (attempt {attempt}); schema ensured.", flush=True)
             return
         except Exception as exc:  # noqa: BLE001

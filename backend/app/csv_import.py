@@ -99,6 +99,7 @@ class ImportReport:
     duplicates_dropped: int = 0
     skipped_invalid: int = 0
     per_category_counts: dict[str, int] = field(default_factory=lambda: {"men": 0, "women": 0})
+    explicit_men_groups: dict[str, int] = field(default_factory=dict)
     skipped: list[SkippedRow] = field(default_factory=list)
     dropped_duplicates: list[DroppedDuplicate] = field(default_factory=list)
 
@@ -108,6 +109,7 @@ class ImportReport:
             "duplicates_dropped": self.duplicates_dropped,
             "skipped_invalid": self.skipped_invalid,
             "per_category_counts": self.per_category_counts,
+            "explicit_men_groups": self.explicit_men_groups,
             "skipped": [
                 {"row_number": s.row_number, "reason": s.reason, "raw": s.raw} for s in self.skipped
             ],
@@ -136,22 +138,56 @@ class ParsedRow:
     experience_level: str
     category: Category
     timestamp: str
+    group_label: str | None = None
 
 
-def parse_and_dedup(content: str) -> tuple[list[ParsedRow], ImportReport]:
+# Google Form export without a header row (some sheets omit it).
+_FORM_HEADER = (
+    "Timestamp,Name,Gender,Phone Number,Registration Number,"
+    "Year of Study (4th years not allowed),Level of Exprience\n"
+)
+
+
+def _ensure_header(content: str) -> str:
+    """Prepend the standard form header when the file starts with data rows."""
+    first = content.lstrip("\ufeff").split("\n", 1)[0]
+    if not first.strip():
+        return content
+    if _norm_header(first.split(",")[0]) in HEADER_ALIASES["timestamp"]:
+        return content
+    if re.match(r"\d{2}/\d{2}/\d{4}\s+\d{2}:\d{2}:\d{2}", first.strip()):
+        return _FORM_HEADER + content.lstrip("\ufeff")
+    return content
+
+
+def parse_and_dedup(content: str, category_override: Category | None = None) -> tuple[list[ParsedRow], ImportReport]:
     report = ImportReport()
-    reader = csv.DictReader(io.StringIO(content))
-    if not reader.fieldnames:
+    content = _ensure_header(content)
+    csv_rows = list(csv.reader(io.StringIO(content)))
+    if not csv_rows:
         return [], report
-    hmap = _build_header_map(reader.fieldnames)
+
+    fieldnames = csv_rows[0]
+    hmap = _build_header_map(fieldnames)
 
     def cell(row: dict, key: str) -> str:
         col = hmap.get(key)
         return (row.get(col) or "").strip() if col else ""
 
     accepted: dict[tuple[str, str], ParsedRow] = {}
+    men_group_idx = 0
+    men_seen_in_group = False
+    explicit_men_grouping = False
 
-    for idx, row in enumerate(reader, start=2):
+    for idx, values in enumerate(csv_rows[1:], start=2):
+        if not any((v or "").strip() for v in values):
+            if men_seen_in_group:
+                men_group_idx += 1
+                men_seen_in_group = False
+                explicit_men_grouping = True
+            continue
+
+        row = {fieldnames[i]: values[i] if i < len(values) else "" for i in range(len(fieldnames))}
         snapshot = {k: (v or "").strip() for k, v in row.items() if k}
         name = cell(row, "name")
         gender = cell(row, "gender")
@@ -160,7 +196,7 @@ def parse_and_dedup(content: str) -> tuple[list[ParsedRow], ImportReport]:
         if not name:
             report.skipped.append(SkippedRow(idx, "missing name", snapshot))
             continue
-        category = classify_gender(gender)
+        category = category_override or classify_gender(gender)
         if category is None:
             report.skipped.append(SkippedRow(idx, f"unrecognized gender: {gender!r}", snapshot))
             continue
@@ -180,7 +216,10 @@ def parse_and_dedup(content: str) -> tuple[list[ParsedRow], ImportReport]:
             experience_level=cell(row, "experience"),
             category=category,
             timestamp=cell(row, "timestamp"),
+            group_label=_group_label(men_group_idx) if category == Category.men else None,
         )
+        if category == Category.men:
+            men_seen_in_group = True
 
         ck = (category.value, key)
         existing = accepted.get(ck)
@@ -195,7 +234,18 @@ def parse_and_dedup(content: str) -> tuple[list[ParsedRow], ImportReport]:
 
     report.skipped_invalid = len(report.skipped)
     report.duplicates_dropped = len(report.dropped_duplicates)
+    if explicit_men_grouping:
+        report.explicit_men_groups = {}
+        for row in accepted.values():
+            if row.category == Category.men and row.group_label:
+                report.explicit_men_groups[row.group_label] = report.explicit_men_groups.get(row.group_label, 0) + 1
     return list(accepted.values()), report
+
+
+def _group_label(index: int) -> str:
+    if index < 26:
+        return chr(ord("A") + index)
+    return str(index + 1)
 
 
 def _pick_earliest(a: ParsedRow, b: ParsedRow) -> tuple[ParsedRow, ParsedRow]:
@@ -214,12 +264,12 @@ def _ts(s: str) -> tuple | None:
     return (y, mo, d, h, mi, se)
 
 
-def import_csv(db: Session, content: str) -> ImportReport:
+def import_csv(db: Session, content: str, category_override: Category | None = None) -> ImportReport:
     """Full pipeline. Idempotent upsert keyed on (category, dedup_key).
 
     Existing group assignments and walk-in flags are preserved on re-import.
     """
-    parsed_rows, report = parse_and_dedup(content)
+    parsed_rows, report = parse_and_dedup(content, category_override)
 
     # Load every existing player once and index them in memory. Doing a query per
     # row means hundreds of round-trips, which is slow against a remote DB.
@@ -230,27 +280,30 @@ def import_csv(db: Session, content: str) -> ImportReport:
     for pr in parsed_rows:
         existing = existing_by_key.get((pr.dedup_key, pr.category))
         if existing is None:
-            db.add(
-                Player(
-                    full_name=pr.full_name,
-                    phone_raw=pr.phone_raw or None,
-                    phone_normalized=pr.phone_normalized,
-                    dedup_key=pr.dedup_key,
-                    registration_number=pr.registration_number or None,
-                    year_of_study=pr.year_of_study or None,
-                    experience_level=pr.experience_level or None,
-                    category=pr.category,
-                    entry_timestamp=pr.timestamp or None,
-                )
+            player = Player(
+                full_name=pr.full_name,
+                phone_raw=pr.phone_raw or None,
+                phone_normalized=pr.phone_normalized,
+                dedup_key=pr.dedup_key,
+                registration_number=pr.registration_number or None,
+                year_of_study=pr.year_of_study or None,
+                experience_level=pr.experience_level or None,
+                category=pr.category,
+                entry_timestamp=pr.timestamp or None,
             )
+            db.add(player)
+            existing_by_key[(pr.dedup_key, pr.category)] = player
         else:
-            existing.full_name = pr.full_name
-            existing.phone_raw = pr.phone_raw or None
-            existing.phone_normalized = pr.phone_normalized
-            existing.registration_number = pr.registration_number or None
-            existing.year_of_study = pr.year_of_study or None
-            existing.experience_level = pr.experience_level or None
-            existing.entry_timestamp = pr.timestamp or None
+            player = existing
+            player.full_name = pr.full_name
+            player.phone_raw = pr.phone_raw or None
+            player.phone_normalized = pr.phone_normalized
+            player.registration_number = pr.registration_number or None
+            player.year_of_study = pr.year_of_study or None
+            player.experience_level = pr.experience_level or None
+            player.entry_timestamp = pr.timestamp or None
+        if pr.category == Category.men and report.explicit_men_groups:
+            player.group_label = pr.group_label
         report.per_category_counts[pr.category.value] += 1
 
     report.imported = len(parsed_rows)

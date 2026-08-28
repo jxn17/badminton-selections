@@ -13,6 +13,7 @@ export function resolveFormat(formats: RoundFormat[], round: number): RoundForma
     id: -1,
     round_number: null,
     points_to_win: 21,
+    alt_points_to_win: 11,
     win_by_two: true,
     hard_cap: 30,
     games_to_win_match: 1,

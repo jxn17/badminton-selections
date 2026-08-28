@@ -2,9 +2,9 @@ services:
   db:
     image: postgres:16-alpine
     environment:
-      POSTGRES_USER: badminton
-      POSTGRES_PASSWORD: badminton
-      POSTGRES_DB: badminton
+      POSTGRES_USER: ${POSTGRES_USER:-badminton}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-badminton}
+      POSTGRES_DB: ${POSTGRES_DB:-badminton}
     ports:
       # Host port configurable to avoid clashing with a local Postgres on 5432.
       - "${DB_HOST_PORT:-5432}:5432"
@@ -26,7 +26,7 @@ services:
       db:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgresql+psycopg2://badminton:badminton@db:5432/badminton
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-badminton}:${POSTGRES_PASSWORD:-badminton}@db:5432/${POSTGRES_DB:-badminton}
       ADMIN_ACCESS_CODE: ${ADMIN_ACCESS_CODE:-trials2026}
       SECRET_KEY: ${SECRET_KEY:-dev-insecure-secret-change-me}
       FRONTEND_URL: ${FRONTEND_URL:-http://localhost:8000}

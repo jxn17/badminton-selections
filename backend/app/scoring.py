@@ -54,6 +54,7 @@ def resolve_format(db: Session, tournament: Tournament, round_number: int) -> Ro
         tournament_id=tournament.id,
         round_number=None,
         points_to_win=21,
+        alt_points_to_win=11,
         win_by_two=True,
         hard_cap=30,
         games_to_win_match=1,
@@ -119,6 +120,39 @@ def evaluate_game(fmt: RoundFormat, a: int, b: int) -> GameResult:
 
 
 # --------------------------------------------------------------------------
+# Dual-target evaluation
+# --------------------------------------------------------------------------
+def _evaluate_game_with_alt(fmt: RoundFormat, a: int, b: int) -> GameResult:
+    """Evaluate a game, trying alt_points_to_win when the primary target is incomplete.
+
+    This lets a tournament accept games played to *either* target (e.g. 21 or 11)
+    without the admin switching format settings.
+    """
+    primary = evaluate_game(fmt, a, b)
+    if primary.status in ("a", "b"):
+        return primary  # clear winner under primary rules
+    if fmt.alt_points_to_win is None or fmt.alt_points_to_win == fmt.points_to_win:
+        return primary  # no alternate configured
+
+    alt_fmt = RoundFormat(
+        tournament_id=fmt.tournament_id,
+        round_number=fmt.round_number,
+        points_to_win=fmt.alt_points_to_win,
+        win_by_two=fmt.win_by_two,
+        hard_cap=None,  # cap is specific to the primary target
+        games_to_win_match=fmt.games_to_win_match,
+    )
+    alt = evaluate_game(alt_fmt, a, b)
+    if alt.status in ("a", "b"):
+        return alt  # winner under alternate rules
+    # Prefer "incomplete" over "invalid" (the game might still be in progress
+    # under the primary target).
+    if primary.status == "incomplete":
+        return primary
+    return alt
+
+
+# --------------------------------------------------------------------------
 # Match scoring
 # --------------------------------------------------------------------------
 @dataclass
@@ -135,7 +169,7 @@ def _match_winner_from_games(
     wins_a = wins_b = 0
     results: list[GameResult] = []
     for g in games:
-        res = evaluate_game(fmt, g.score_a, g.score_b)
+        res = _evaluate_game_with_alt(fmt, g.score_a, g.score_b)
         if res.status == "invalid":
             raise ScoringError(res.error or "Invalid score.", g.game_number)
         results.append(res)

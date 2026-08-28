@@ -7,9 +7,11 @@ interface Props {
   data: BracketData;
   editable: boolean;
   onChanged: () => void;
+  highlightPlayerId?: number | null;
+  onHighlightClear?: () => void;
 }
 
-export default function Bracket({ data, editable, onChanged }: Props) {
+export default function Bracket({ data, editable, onChanged, highlightPlayerId, onHighlightClear }: Props) {
   const rounds = groupByRound(data.matches);
   const roundNumbers = [...rounds.keys()].sort((a, b) => a - b);
   const totalRounds = roundNumbers.length;
@@ -24,6 +26,18 @@ export default function Bracket({ data, editable, onChanged }: Props) {
     // Keep the phone round-selector valid when the bracket changes.
     if (!roundNumbers.includes(mobileRound)) setMobileRound(roundNumbers[0] ?? 1);
   }, [data.tournament.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // When a player is highlighted from search, jump the mobile round selector
+  // to whichever round contains their earliest non-bye match.
+  useEffect(() => {
+    if (!highlightPlayerId) return;
+    for (const rn of roundNumbers) {
+      const match = rounds.get(rn)?.find(
+        (m) => !m.is_bye && (m.player_a_id === highlightPlayerId || m.player_b_id === highlightPlayerId)
+      );
+      if (match) { setMobileRound(rn); break; }
+    }
+  }, [highlightPlayerId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function onSelectForSwap(pid: number) {
     setSwapMsg(null);
@@ -61,6 +75,8 @@ export default function Bracket({ data, editable, onChanged }: Props) {
     selectedForSwap: selected,
     onSelectForSwap,
     wide,
+    highlightPlayerId: highlightPlayerId ?? null,
+    onHighlightClear: onHighlightClear ?? (() => {}),
   });
 
   return (
@@ -124,8 +140,8 @@ export default function Bracket({ data, editable, onChanged }: Props) {
                   {roundName(rn, totalRounds)}
                   <span className="ml-2 font-normal normal-case text-slate-400">
                     {fmt.games_to_win_match > 1
-                      ? `Best of ${fmt.games_to_win_match * 2 - 1}, to ${fmt.points_to_win}`
-                      : `1 game to ${fmt.points_to_win}`}
+                      ? `Best of ${fmt.games_to_win_match * 2 - 1}, to ${fmt.points_to_win}${fmt.alt_points_to_win ? ` or ${fmt.alt_points_to_win}` : ""}`
+                      : `1 game to ${fmt.points_to_win}${fmt.alt_points_to_win ? ` or ${fmt.alt_points_to_win}` : ""}`}
                   </span>
                 </div>
                 <div className="flex flex-col justify-around gap-4 h-full">

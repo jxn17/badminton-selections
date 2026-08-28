@@ -11,7 +11,9 @@ interface Props {
   swapMode: boolean;
   selectedForSwap: number | null;
   onSelectForSwap: (playerId: number) => void;
-  wide?: boolean; // full-width on phones
+  wide?: boolean;
+  highlightPlayerId?: number | null;
+  onHighlightClear?: () => void;
 }
 
 interface CellPair {
@@ -29,6 +31,8 @@ export default function MatchCard({
   selectedForSwap,
   onSelectForSwap,
   wide = false,
+  highlightPlayerId = null,
+  onHighlightClear = () => {},
 }: Props) {
   const cols = maxGames(format);
   const [cells, setCells] = useState<CellPair[]>([]);
@@ -39,6 +43,21 @@ export default function MatchCard({
   // Local override so the star flips the instant it is clicked, before the
   // server round-trip and bracket refetch land.
   const [flagOverride, setFlagOverride] = useState<Record<number, boolean>>({});
+  const [noShowOverride, setNoShowOverride] = useState<Record<number, boolean>>({});
+  const cardRef = useRef<HTMLDivElement>(null);
+
+  // Check if this card contains the highlighted player.
+  const isHighlighted =
+    highlightPlayerId !== null &&
+    (match.player_a_id === highlightPlayerId || match.player_b_id === highlightPlayerId);
+
+  // Scroll to this card and auto-clear the highlight after 4 seconds.
+  useEffect(() => {
+    if (!isHighlighted) return;
+    cardRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    const t = window.setTimeout(() => onHighlightClear(), 4000);
+    return () => window.clearTimeout(t);
+  }, [isHighlighted]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // True while this admin has unsaved edits in the score boxes. The bracket
   // refetches every 15s; without this guard that refetch would wipe whatever is
@@ -122,6 +141,22 @@ export default function MatchCard({
     return flagOverride[p.id] ?? p.flagged;
   }
 
+  function isNoShow(p: Player): boolean {
+    return noShowOverride[p.id] ?? p.no_show;
+  }
+
+  async function toggleNoShow(p: Player) {
+    const next = !isNoShow(p);
+    setNoShowOverride((prev) => ({ ...prev, [p.id]: next }));
+    try {
+      await api.noShowPlayer(p.id, next);
+      onChanged();
+    } catch (e) {
+      setNoShowOverride((prev) => ({ ...prev, [p.id]: !next }));
+      setError(e instanceof Error ? e.message : "Failed.");
+    }
+  }
+
   async function saveTime() {
     try {
       await api.setSchedule(match.id, time);
@@ -169,8 +204,10 @@ export default function MatchCard({
             {p?.is_walkin && (
               <span className="text-[9px] uppercase bg-purple-100 text-purple-700 px-1 rounded">spot</span>
             )}
-            {/* Call sign, to the right of the name. */}
-            {editable && p?.phone && (
+            {p && isNoShow(p) && (
+              <span className="text-[9px] uppercase bg-red-100 text-red-700 px-1 rounded">no show</span>
+            )}
+            {p?.phone && (
               <a
                 href={`tel:${p.phone}`}
                 onClick={(e) => e.stopPropagation()}
@@ -183,8 +220,7 @@ export default function MatchCard({
           </div>
           <div className="flex items-center gap-1.5 mt-0.5">
             {tag && <span className={`text-[9px] px-1 rounded ${tag.cls}`}>{tag.label}</span>}
-            {/* Phone number only, below the name. */}
-            {editable && p?.phone && (
+            {p?.phone && (
               <a
                 href={`tel:${p.phone}`}
                 onClick={(e) => e.stopPropagation()}
@@ -202,13 +238,26 @@ export default function MatchCard({
           <span className="text-[10px] font-semibold text-slate-600 bg-slate-100 px-1.5 py-0.5 rounded">BYE</span>
         )}
         {editable && p && (
-          <button
-            onClick={() => toggleFlag(p)}
-            title="Flag / shortlist"
-            className={`text-lg leading-none px-0.5 ${isFlagged(p) ? "text-amber-500" : "text-slate-300 hover:text-amber-400"}`}
-          >
-            {isFlagged(p) ? "★" : "☆"}
-          </button>
+          <>
+            <button
+              onClick={() => toggleFlag(p)}
+              title="Shortlist — keep even if they lose"
+              className={`text-lg leading-none px-0.5 ${isFlagged(p) ? "text-amber-500" : "text-slate-300 hover:text-amber-400"}`}
+            >
+              {isFlagged(p) ? "★" : "☆"}
+            </button>
+            <button
+              onClick={() => toggleNoShow(p)}
+              title="Mark as no show"
+              className={`text-[10px] px-1 py-0.5 rounded border leading-none ${
+                isNoShow(p)
+                  ? "bg-red-100 border-red-300 text-red-700"
+                  : "border-slate-200 text-slate-400 hover:border-red-200"
+              }`}
+            >
+              NS
+            </button>
+          </>
         )}
         <div className="flex gap-1">
           {cells.map((c, i) =>
@@ -249,7 +298,17 @@ export default function MatchCard({
   };
 
   return (
-    <div className={`bg-white rounded-lg border border-slate-200 shadow-sm ${wide ? "w-full" : "w-72"}`}>
+    <div
+      ref={cardRef}
+      onClick={isHighlighted ? onHighlightClear : undefined}
+      className={`bg-white rounded-lg border shadow-sm transition-all duration-300 ${
+        wide ? "w-full" : "w-72"
+      } ${
+        isHighlighted
+          ? "border-emerald-400 ring-2 ring-emerald-300 ring-offset-1 shadow-emerald-100 shadow-md animate-pulse"
+          : "border-slate-200"
+      }`}
+    >
       {playerRow("a", match.player_a_id)}
       <div className="border-t border-slate-100" />
       {playerRow("b", match.player_b_id)}

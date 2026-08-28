@@ -170,3 +170,93 @@ def test_reedit_blocked_when_downstream_started(db):
     # Re-editing m0 to flip its winner must be blocked.
     with pytest.raises(ScoringError):
         apply_scores(db, m0, [GameInput(1, 9, 15)], "admin@test.dev")
+
+
+# --------------------------------------------------------------------------
+# Dual-target (alt_points_to_win) tests
+# --------------------------------------------------------------------------
+def fmt_dual(ptw=21, alt=11, wbt=True, cap=30, games=1):
+    return RoundFormat(
+        tournament_id=0, round_number=None, points_to_win=ptw,
+        alt_points_to_win=alt, win_by_two=wbt, hard_cap=cap,
+        games_to_win_match=games,
+    )
+
+
+def _setup_dual(db, n=8, seed=1):
+    """Like _setup, but the format has alt_points_to_win=11."""
+    for i in range(n):
+        db.add(
+            Player(
+                full_name=f"P{i}", phone_raw=str(9000000000 + i),
+                phone_normalized=str(9000000000 + i), dedup_key=f"ph:{9000000000 + i}",
+                category=Category.men,
+            )
+        )
+    t = Tournament(category=Category.men, status=TournamentStatus.draft)
+    db.add(t)
+    db.flush()
+    db.add(RoundFormat(tournament_id=t.id, round_number=None, points_to_win=21,
+                       alt_points_to_win=11, win_by_two=True, hard_cap=30,
+                       games_to_win_match=1))
+    db.flush()
+    generate_draw(db, t, seed=seed)
+    db.commit()
+    return t
+
+
+from app.scoring import _evaluate_game_with_alt
+
+
+@pytest.mark.parametrize(
+    "a,b,expected",
+    [
+        (21, 15, "a"),        # primary 21-point winner
+        (15, 21, "b"),        # primary 21-point winner
+        (11, 5, "a"),         # alt 11-point winner
+        (5, 11, "b"),         # alt 11-point winner
+        (11, 9, "a"),         # alt 11-point, win-by-two met
+        (12, 10, "a"),        # alt deuce, margin=2 → winner
+        (11, 10, "incomplete"),  # alt deuce, margin=1
+        (10, 8, "incomplete"),   # both targets in progress
+        (15, 11, "incomplete"),  # 21-point game in progress (invalid under 11)
+    ],
+)
+def test_dual_target_evaluation(a, b, expected):
+    """Scores valid under either the 21 or 11 target produce a winner."""
+    f = fmt_dual()
+    result = _evaluate_game_with_alt(f, a, b)
+    assert result.status == expected
+
+
+def test_11_point_game_advances_winner(db):
+    """An 11-point score (e.g. 11-5) produces a winner and advances them."""
+    t = _setup_dual(db, n=8, seed=3)
+    r1 = _round(db, t, 1)
+    m = next(m for m in r1 if not m.is_bye)
+    winner_id = m.player_a_id
+
+    # Score an 11-point game: A wins 11-5
+    apply_scores(db, m, [GameInput(1, 11, 5)], "admin@test.dev")
+    db.commit()
+
+    assert m.status == MatchStatus.completed
+    assert m.winner_id == winner_id
+    nxt = db.get(Match, m.next_match_id)
+    advanced = nxt.player_a_id if m.position_in_round % 2 == 0 else nxt.player_b_id
+    assert advanced == winner_id
+
+
+def test_21_point_game_still_works_with_alt(db):
+    """A 21-point score still works when alt is configured."""
+    t = _setup_dual(db, n=8, seed=3)
+    r1 = _round(db, t, 1)
+    m = next(m for m in r1 if not m.is_bye)
+    winner_id = m.player_b_id
+
+    apply_scores(db, m, [GameInput(1, 15, 21)], "admin@test.dev")
+    db.commit()
+
+    assert m.status == MatchStatus.completed
+    assert m.winner_id == winner_id
+

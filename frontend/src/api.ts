@@ -13,7 +13,8 @@ export interface Player {
   is_walkin: boolean;
   flagged: boolean;
   flag_note: string | null;
-  phone: string | null; // admin-only; null for public
+  no_show: boolean;
+  phone: string | null;
   registration_number: string | null;
 }
 
@@ -44,6 +45,7 @@ export interface RoundFormat {
   id: number;
   round_number: number | null;
   points_to_win: number;
+  alt_points_to_win: number | null;
   win_by_two: boolean;
   hard_cap: number | null;
   games_to_win_match: number;
@@ -142,6 +144,10 @@ export const api = {
 
   groups: () => req<GroupSummary[]>("/api/groups"),
   flagged: () => req<Player[]>("/api/flagged"),
+  roster: (category?: Category) => {
+    const q = category ? `?category=${category}` : "";
+    return req<Player[]>(`/api/roster${q}`);
+  },
   search: (q: string) => req<SearchResult[]>(`/api/search?q=${encodeURIComponent(q)}`),
   moveToGroup: (phones: string[], target_groups: string[]) =>
     req<any>("/api/admin/move-to-group", {
@@ -167,14 +173,15 @@ export const api = {
     return req<Bracket>(`/api/bracket?${q.toString()}`);
   },
 
-  importCsv: async (file: File) => {
+  importCsv: async (file: File, category?: Category) => {
     const form = new FormData();
     form.append("file", file);
+    const url = category ? `/api/admin/import?category=${category}` : "/api/admin/import";
     // Fail loudly after 60s rather than spinning forever if the request stalls.
     const ctrl = new AbortController();
     const timer = window.setTimeout(() => ctrl.abort(), 60000);
     try {
-      const res = await fetch("/api/admin/import", {
+      const res = await fetch(url, {
         method: "POST",
         credentials: "include",
         body: form,
@@ -217,6 +224,11 @@ export const api = {
     req<any>(`/api/admin/players/${playerId}/flag`, {
       method: "POST",
       body: JSON.stringify({ flagged, note: note ?? null }),
+    }),
+  noShowPlayer: (playerId: number, no_show: boolean) =>
+    req<any>(`/api/admin/players/${playerId}/no-show`, {
+      method: "POST",
+      body: JSON.stringify({ no_show }),
     }),
   swap: (tid: number, x: number, y: number) =>
     req<any>(`/api/admin/tournaments/${tid}/swap`, {

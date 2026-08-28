@@ -72,6 +72,7 @@ class Player(Base):
     is_walkin: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     flagged: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     flag_note: Mapped[str | None] = mapped_column(String(300))
+    no_show: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     entry_timestamp: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
@@ -163,6 +164,7 @@ class RoundFormat(Base):
     )
     round_number: Mapped[int | None] = mapped_column(Integer)
     points_to_win: Mapped[int] = mapped_column(Integer, nullable=False, default=21)
+    alt_points_to_win: Mapped[int | None] = mapped_column(Integer)  # e.g. 11 — accept games finishing at either target
     win_by_two: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     hard_cap: Mapped[int | None] = mapped_column(Integer)
     games_to_win_match: Mapped[int] = mapped_column(Integer, nullable=False, default=1)

@@ -19,6 +19,7 @@ def default_format(tournament_id: int) -> RoundFormat:
         tournament_id=tournament_id,
         round_number=None,
         points_to_win=21,
+        alt_points_to_win=11,
         win_by_two=True,
         hard_cap=30,
         games_to_win_match=1,
@@ -62,6 +63,45 @@ def rebuild_men(db: Session, seed: int | None = None) -> dict:
         generate_draw(db, t, seed=seed + 100 + i)
         results[label] = {
             "count": counts[label],
+            "bracket_size": t.bracket_size,
+            "num_byes": t.num_byes,
+        }
+    db.commit()
+    return {"seed": seed, "groups": results}
+
+
+def rebuild_men_from_assigned_groups(db: Session, seed: int | None = None) -> dict:
+    """Generate men's draws from group_label values already assigned by import."""
+    if seed is None:
+        seed = random.SystemRandom().randint(1, 2**31 - 1)
+    labels = [
+        label
+        for (label,) in (
+            db.query(Player.group_label)
+            .filter(Player.category == Category.men, Player.group_label.is_not(None))
+            .distinct()
+            .all()
+        )
+        if label
+    ]
+    labels.sort()
+    results = {}
+    for i, label in enumerate(labels):
+        count = (
+            db.query(Player)
+            .filter(Player.category == Category.men, Player.group_label == label)
+            .count()
+        )
+        t = get_or_create_tournament(db, Category.men, label)
+        if t.status == TournamentStatus.locked:
+            results[label] = {"count": count, "skipped": "locked"}
+            continue
+        if count < 2:
+            results[label] = {"count": count, "skipped": "needs at least 2 players"}
+            continue
+        generate_draw(db, t, seed=seed + 100 + i)
+        results[label] = {
+            "count": count,
             "bracket_size": t.bracket_size,
             "num_byes": t.num_byes,
         }

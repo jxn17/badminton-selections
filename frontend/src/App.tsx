@@ -5,6 +5,7 @@ import Bracket from "./components/Bracket";
 import AdminToolbar from "./components/AdminToolbar";
 import LoginBar from "./components/LoginBar";
 import FlaggedList from "./components/FlaggedList";
+import RosterList from "./components/RosterList";
 import SearchBar from "./components/SearchBar";
 
 interface Selection {
@@ -20,8 +21,9 @@ export default function App() {
   const [data, setData] = useState<BracketData | null>(null);
   const [loading, setLoading] = useState(true);
   const [showLogin, setShowLogin] = useState(false);
-  const [view, setView] = useState<"bracket" | "flagged">("bracket");
+  const [view, setView] = useState<"bracket" | "flagged" | "roster">("bracket");
   const [flaggedCount, setFlaggedCount] = useState(0);
+  const [highlightPlayerId, setHighlightPlayerId] = useState<number | null>(null);
   const timer = useRef<number | null>(null);
   const selRef = useRef<Selection | null>(null);
 
@@ -93,11 +95,12 @@ export default function App() {
   const pickGroup = useCallback((g: GroupSummary) => {
     setView("bracket");
     setSel(selectionFor(g));
+    setHighlightPlayerId(null); // clear highlight on manual group switch
   }, []);
 
-  // The shortlist is admin-only; drop back to the bracket if an admin signs out.
+  // Admin-only views; drop back to the bracket if an admin signs out.
   useEffect(() => {
-    if (!auth.isAdmin && view === "flagged") setView("bracket");
+    if (!auth.isAdmin && (view === "flagged" || view === "roster")) setView("bracket");
   }, [auth.isAdmin, view]);
 
   const menGroups = useMemo(
@@ -153,9 +156,13 @@ export default function App() {
           <SearchBar
             isAdmin={auth.isAdmin}
             onChanged={refresh}
-            onPick={(category, group) => {
+            onPick={(category, group, playerId) => {
               const g = groups.find((x) => x.category === category && x.group_label === group);
-              if (g) pickGroup(g);
+              if (g) {
+                setView("bracket");
+                setSel(selectionFor(g));
+                setHighlightPlayerId(playerId);
+              }
             }}
           />
         </div>
@@ -171,7 +178,7 @@ export default function App() {
                 onClick={() => pickGroup(g)}
                 locked={g.status === "locked"}
               >
-                {g.group_label}
+                Group {g.group_label}
                 <span className="ml-1 text-[10px] opacity-70">{g.player_count}</span>
               </TabButton>
             ))}
@@ -196,6 +203,14 @@ export default function App() {
           {auth.isAdmin && (
             <>
               <div className="w-px h-6 bg-slate-200" />
+              <button
+                onClick={() => setView((v) => (v === "roster" ? "bracket" : "roster"))}
+                className={`px-3 py-1.5 text-sm rounded-md border ${
+                  view === "roster" ? "bg-court text-white border-court" : "bg-white text-slate-600 border-slate-200"
+                }`}
+              >
+                📋 Roster
+              </button>
               <button
                 onClick={() => setView((v) => (v === "flagged" ? "bracket" : "flagged"))}
                 className={`px-3 py-1.5 text-sm rounded-md border ${
@@ -227,8 +242,17 @@ export default function App() {
 
         {view === "flagged" ? (
           <div className="mt-4">
-            <div className="text-sm text-slate-500 mb-3">Shortlisted players (flagged ⭐ from the brackets)</div>
+            <div className="text-sm text-slate-500 mb-3">
+              Shortlisted players — mark ⭐ from brackets or roster to keep them even if they lose.
+            </div>
             <FlaggedList editable={auth.isAdmin} onChanged={refresh} />
+          </div>
+        ) : view === "roster" ? (
+          <div className="mt-4">
+            <div className="text-sm text-slate-500 mb-3">
+              Full entrant roster with phone numbers. Filter by men or women.
+            </div>
+            <RosterList editable={auth.isAdmin} onChanged={refresh} />
           </div>
         ) : (
           <>
@@ -239,7 +263,7 @@ export default function App() {
                 <div className="text-sm text-slate-500 mb-2">
                   {sel?.category === "men" ? `Men's — Group ${sel?.group}` : "Women's"} · {data.players.length} players
                 </div>
-                <Bracket data={data} editable={auth.isAdmin} onChanged={refresh} />
+                <Bracket data={data} editable={auth.isAdmin} onChanged={refresh} highlightPlayerId={highlightPlayerId} onHighlightClear={() => setHighlightPlayerId(null)} />
               </div>
             ) : (
               loading && <div className="py-16 text-center text-slate-400">Loading…</div>
@@ -249,7 +273,7 @@ export default function App() {
       </main>
 
       <footer className="text-center text-xs text-slate-400 py-4">
-        Public view is read-only. Phone numbers are visible to signed-in admins only.
+        Public view is read-only. Admins can edit scores, shortlist, and mark no-shows.
       </footer>
     </div>
   );

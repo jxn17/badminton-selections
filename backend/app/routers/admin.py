@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import datetime as dt
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from sqlalchemy.orm import Session
 
 from ..audit import match_snapshot, record
@@ -22,6 +22,7 @@ from ..service import (
     add_walkin,
     clear_schedule,
     move_players_to_groups,
+    rebuild_men_from_assigned_groups,
     rebuild_men,
     rebuild_women,
     remove_player,
@@ -31,6 +32,7 @@ from ..service import (
 from ..schemas import (
     ClearScheduleIn,
     FlagIn,
+    NoShowIn,
     MoveToGroupIn,
     ScheduleDayIn,
     GenerateDrawIn,
@@ -70,18 +72,40 @@ def _scoring_error(exc: ScoringError):
 @router.post("/import")
 async def import_entries(
     file: UploadFile = File(...),
+    category: str | None = Query(default=None),
     db: Session = Depends(get_db),
     admin: str = Depends(require_admin),
 ):
+    cat_override: Category | None = None
+    if category:
+        try:
+            cat_override = Category(category)
+        except ValueError:
+            raise HTTPException(404, "Category must be 'men' or 'women'.") from None
+
     raw = await file.read()
     try:
         content = raw.decode("utf-8-sig")
     except UnicodeDecodeError:
         content = raw.decode("latin-1")
-    report = import_csv(db, content)
-    record(db, admin, "import_csv", "players", None, after=report.as_dict())
+    report = import_csv(db, content, cat_override)
+    result = report.as_dict()
+    try:
+        if cat_override == Category.men:
+            result["draws"] = (
+                rebuild_men_from_assigned_groups(db)
+                if report.explicit_men_groups
+                else rebuild_men(db)
+            )
+        elif cat_override == Category.women:
+            result["draws"] = rebuild_women(db)
+        elif report.explicit_men_groups:
+            result["draws"] = rebuild_men_from_assigned_groups(db)
+    except ValueError as exc:
+        result["draws"] = {"skipped": str(exc)}
+    record(db, admin, "import_csv", "players", None, after=result)
     db.commit()
-    return report.as_dict()
+    return result
 
 
 @router.post("/men/rebuild")
@@ -222,6 +246,18 @@ def flag_player(player_id: int, body: FlagIn, db: Session = Depends(get_db), adm
     return {"id": p.id, "flagged": p.flagged, "flag_note": p.flag_note}
 
 
+@router.post("/players/{player_id}/no-show")
+def no_show_player(player_id: int, body: NoShowIn, db: Session = Depends(get_db), admin: str = Depends(require_admin)):
+    p = db.get(Player, player_id)
+    if p is None:
+        raise HTTPException(404, "Player not found.")
+    before = {"no_show": p.no_show}
+    p.no_show = body.no_show
+    record(db, admin, "no_show_player", "player", p.id, before, {"no_show": p.no_show})
+    db.commit()
+    return {"id": p.id, "no_show": p.no_show}
+
+
 @router.delete("/players/{player_id}")
 def delete_player(player_id: int, db: Session = Depends(get_db), admin: str = Depends(require_admin)):
     try:
@@ -347,6 +383,7 @@ def upsert_format(tournament_id: int, body: RoundFormatIn, db: Session = Depends
         fmt = RoundFormat(tournament_id=t.id, round_number=body.round_number)
         db.add(fmt)
     fmt.points_to_win = body.points_to_win
+    fmt.alt_points_to_win = body.alt_points_to_win
     fmt.win_by_two = body.win_by_two
     fmt.hard_cap = body.hard_cap
     fmt.games_to_win_match = body.games_to_win_match

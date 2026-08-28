@@ -3,7 +3,7 @@ import { Category, SearchResult, api } from "../api";
 
 interface Props {
   isAdmin: boolean;
-  onPick: (category: Category, group: string | null) => void;
+  onPick: (category: Category, group: string | null, playerId: number) => void;
   onChanged: () => void;
 }
 
@@ -74,7 +74,7 @@ export default function SearchBar({ isAdmin, onPick, onChanged }: Props) {
               <div className="flex items-center justify-between gap-2">
                 <button
                   onClick={() => {
-                    onPick(r.category, r.group_label);
+                    onPick(r.category, r.group_label, r.id);
                     setOpen(false);
                   }}
                   className="text-left font-medium text-slate-800 hover:text-court truncate"
@@ -85,9 +85,9 @@ export default function SearchBar({ isAdmin, onPick, onChanged }: Props) {
                   </span>
                 </button>
                 <div className="flex items-center gap-2 shrink-0">
-                  {isAdmin && r.phone && (
+                  {r.phone && (
                     <a href={`tel:${r.phone}`} className="text-xs text-court" title={`Call ${r.full_name}`}>
-                      📞
+                      📞 {r.phone}
                     </a>
                   )}
                   {isAdmin && (
