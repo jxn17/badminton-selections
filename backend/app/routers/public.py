@@ -34,6 +34,7 @@ def player_out(p: Player, include_admin_fields: bool) -> PlayerOut:
         flagged=(p.flagged if include_admin_fields else False),
         flag_note=(p.flag_note if include_admin_fields else None),
         no_show=(p.no_show if include_admin_fields else False),
+        reported=p.reported,
         phone=p.phone_normalized,
         registration_number=(p.registration_number if include_admin_fields else None),
     )

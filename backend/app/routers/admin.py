@@ -36,6 +36,7 @@ from ..schemas import (
     ClearScheduleIn,
     FlagIn,
     NoShowIn,
+    ReportedIn,
     MoveToGroupIn,
     ScheduleDayIn,
     GenerateDrawIn,
@@ -120,6 +121,37 @@ def build_men(body: GenerateDrawIn, db: Session = Depends(get_db), admin: str = 
     record(db, admin, "rebuild_men", "tournament", None, after=result)
     db.commit()
     return result
+
+
+@router.post("/men/clear-draws")
+def clear_men_draws_endpoint(db: Session = Depends(get_db), admin: str = Depends(require_admin)):
+    tournaments = db.query(Tournament).filter(Tournament.category == Category.men).all()
+    cleared_groups = []
+    
+    locked_labels = {t.group_label for t in tournaments if t.status == TournamentStatus.locked}
+    
+    for t in tournaments:
+        if t.status == TournamentStatus.locked:
+            continue
+        for m in list(t.matches):
+            db.delete(m)
+        t.bracket_size = None
+        t.num_byes = None
+        t.draw_seed = None
+        t.status = TournamentStatus.draft
+        if t.group_label:
+            cleared_groups.append(t.group_label)
+            
+    # Reset group labels for men in unlocked groups
+    q = db.query(Player).filter(Player.category == Category.men)
+    if locked_labels:
+        q = q.filter((Player.group_label.is_(None)) | (Player.group_label.notin_(locked_labels)))
+    for p in q.all():
+        p.group_label = None
+        
+    record(db, admin, "clear_men_draws", "tournament", None, after={"cleared": cleared_groups})
+    db.commit()
+    return {"cleared_groups": cleared_groups}
 
 
 @router.post("/women/rebuild")
@@ -284,6 +316,18 @@ def no_show_player(player_id: int, body: NoShowIn, db: Session = Depends(get_db)
 
     db.commit()
     return {"id": p.id, "no_show": p.no_show}
+
+
+@router.post("/players/{player_id}/reported")
+def reported_player(player_id: int, body: ReportedIn, db: Session = Depends(get_db), admin: str = Depends(require_admin)):
+    p = db.get(Player, player_id)
+    if p is None:
+        raise HTTPException(404, "Player not found.")
+    before = {"reported": p.reported}
+    p.reported = body.reported
+    record(db, admin, "reported_player", "player", p.id, before, {"reported": p.reported})
+    db.commit()
+    return {"id": p.id, "reported": p.reported}
 
 
 @router.delete("/players/{player_id}")

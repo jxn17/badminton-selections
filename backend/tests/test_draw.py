@@ -146,3 +146,40 @@ def test_generate_draw_persists_and_wires(db, n):
             nxt = by_id[m.next_match_id]
             advanced = nxt.player_a_id if m.position_in_round % 2 == 0 else nxt.player_b_id
             assert advanced == m.winner_id
+
+
+def test_clear_men_draws(db):
+    # Setup some players
+    _make_players(db, 8)
+    # Assign them to group A
+    players = db.query(Player).filter(Player.category == Category.men).all()
+    for p in players:
+        p.group_label = "A"
+    
+    t = Tournament(category=Category.men, status=TournamentStatus.draft, group_label="A")
+    db.add(t)
+    db.flush()
+    generate_draw(db, t, seed=123)
+    db.commit()
+
+    # Verify matches exist
+    matches = db.query(Match).filter(Match.tournament_id == t.id).all()
+    assert len(matches) > 0
+    assert t.bracket_size is not None
+
+    # Call endpoint function directly
+    from app.routers.admin import clear_men_draws_endpoint
+    res = clear_men_draws_endpoint(db, admin="admin@test.dev")
+
+    # Verify matches are deleted, bracket values reset
+    matches_after = db.query(Match).filter(Match.tournament_id == t.id).all()
+    assert len(matches_after) == 0
+    assert t.bracket_size is None
+    assert t.num_byes is None
+    assert t.draw_seed is None
+    assert t.status == TournamentStatus.draft
+
+    # Verify players' group labels are reset to None
+    players_after = db.query(Player).filter(Player.category == Category.men).all()
+    for p in players_after:
+        assert p.group_label is None

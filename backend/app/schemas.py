@@ -22,6 +22,7 @@ class PlayerOut(BaseModel):
     flagged: bool = False
     flag_note: str | None = None
     no_show: bool = False
+    reported: bool = False
     phone: str | None = None
     # Admin-only (null on public responses):
     registration_number: str | None = None
@@ -119,6 +120,10 @@ class FlagIn(BaseModel):
 
 class NoShowIn(BaseModel):
     no_show: bool
+
+
+class ReportedIn(BaseModel):
+    reported: bool
 
 
 class SwapIn(BaseModel):

@@ -357,3 +357,29 @@ def test_noshow_prevent_scoring(db):
     with pytest.raises(ScoringError):
         apply_scores(db, m, [GameInput(1, 15, 9)], "admin@test.dev")
 
+
+def test_reported_player(db):
+    p = Player(
+        full_name="Checkin Player",
+        phone_raw="9898989898",
+        phone_normalized="9898989898",
+        dedup_key="ph:9898989898",
+        category=Category.men,
+    )
+    db.add(p)
+    db.commit()
+
+    assert not p.reported
+
+    from app.routers.admin import reported_player
+    from app.schemas import ReportedIn
+    
+    res = reported_player(p.id, ReportedIn(reported=True), db, admin="admin@test.dev")
+    assert res["reported"] is True
+    assert p.reported is True
+
+    # toggle off
+    res = reported_player(p.id, ReportedIn(reported=False), db, admin="admin@test.dev")
+    assert res["reported"] is False
+    assert not p.reported
+

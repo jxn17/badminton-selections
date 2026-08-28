@@ -39,6 +39,12 @@ export default function RosterList({ editable, onChanged }: { editable: boolean;
     onChanged();
   }
 
+  async function toggleReported(p: Player) {
+    await api.reportPlayer(p.id, !p.reported);
+    load();
+    onChanged();
+  }
+
   if (loading) return <div className="py-10 text-center text-slate-400">Loading…</div>;
 
   return (
@@ -81,11 +87,12 @@ export default function RosterList({ editable, onChanged }: { editable: boolean;
               {filtered.map((p) => {
                 const tag = expTag(p.experience_level);
                 return (
-                  <tr key={p.id} className={p.no_show ? "bg-red-50/50" : undefined}>
+                  <tr key={p.id} className={p.no_show ? "bg-red-50/50" : p.reported ? "bg-emerald-50/20" : undefined}>
                     <td className="px-3 py-2">
                       <div className="font-medium text-slate-800">{p.full_name}</div>
                       {p.flagged && <span className="text-[10px] text-amber-600">⭐ Shortlisted</span>}
                       {p.no_show && <span className="text-[10px] text-red-600 ml-1">No show</span>}
+                      {p.reported && <span className="text-[10px] text-emerald-600 ml-1">✓ Reported</span>}
                     </td>
                     <td className="px-3 py-2 tabular-nums">
                       {p.phone ? (
@@ -122,6 +129,17 @@ export default function RosterList({ editable, onChanged }: { editable: boolean;
                             }`}
                           >
                             {p.no_show ? "No show ✓" : "No show"}
+                          </button>
+                          <button
+                            onClick={() => toggleReported(p)}
+                            title="Mark as reported (present)"
+                            className={`text-xs px-2 py-0.5 rounded border ${
+                              p.reported
+                                ? "bg-emerald-100 border-emerald-300 text-emerald-700"
+                                : "border-slate-200 text-slate-500 hover:border-emerald-200"
+                            }`}
+                          >
+                            {p.reported ? "Reported ✓" : "Report"}
                           </button>
                         </div>
                       </td>

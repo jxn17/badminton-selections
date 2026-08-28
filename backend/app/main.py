@@ -59,6 +59,9 @@ def on_startup() -> None:
                         "ALTER TABLE players ADD COLUMN IF NOT EXISTS no_show BOOLEAN NOT NULL DEFAULT FALSE"
                     ))
                     conn.execute(text(
+                        "ALTER TABLE players ADD COLUMN IF NOT EXISTS reported BOOLEAN NOT NULL DEFAULT FALSE"
+                    ))
+                    conn.execute(text(
                         "ALTER TABLE round_formats ADD COLUMN IF NOT EXISTS alt_points_to_win INTEGER"
                     ))
                     # Backfill: set alt=11 on existing rows that have primary=21 so

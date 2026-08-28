@@ -186,6 +186,21 @@ export default function AdminToolbar({ tournament, category, onChanged }: Props)
               >
                 Rebuild men (A–D)
               </MenuItem>
+              <MenuItem
+                danger
+                disabled={busy}
+                onClick={() =>
+                  act(() => {
+                    if (confirm("Clear all men's draws? This deletes all men's matches and unassigns their groups."))
+                      run(
+                        () => api.clearMenDraws(),
+                        () => "Men's draws cleared and groups unassigned."
+                      );
+                  })
+                }
+              >
+                Clear men's draws
+              </MenuItem>
             </div>
           )}
         </div>

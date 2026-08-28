@@ -200,6 +200,8 @@ export const api = {
   },
   rebuildMen: (seed?: number) =>
     req<any>("/api/admin/men/rebuild", { method: "POST", body: JSON.stringify({ seed: seed ?? null }) }),
+  clearMenDraws: () =>
+    req<any>("/api/admin/men/clear-draws", { method: "POST" }),
   rebuildWomen: (seed?: number) =>
     req<any>("/api/admin/women/rebuild", { method: "POST", body: JSON.stringify({ seed: seed ?? null }) }),
   lock: (tid: number) => req<any>(`/api/admin/tournaments/${tid}/lock`, { method: "POST" }),
@@ -229,6 +231,11 @@ export const api = {
     req<any>(`/api/admin/players/${playerId}/no-show`, {
       method: "POST",
       body: JSON.stringify({ no_show }),
+    }),
+  reportPlayer: (playerId: number, reported: boolean) =>
+    req<any>(`/api/admin/players/${playerId}/reported`, {
+      method: "POST",
+      body: JSON.stringify({ reported }),
     }),
   swap: (tid: number, x: number, y: number) =>
     req<any>(`/api/admin/tournaments/${tid}/swap`, {

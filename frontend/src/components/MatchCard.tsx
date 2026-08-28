@@ -44,6 +44,7 @@ export default function MatchCard({
   // server round-trip and bracket refetch land.
   const [flagOverride, setFlagOverride] = useState<Record<number, boolean>>({});
   const [noShowOverride, setNoShowOverride] = useState<Record<number, boolean>>({});
+  const [reportedOverride, setReportedOverride] = useState<Record<number, boolean>>({});
   const cardRef = useRef<HTMLDivElement>(null);
 
   // Check if this card contains the highlighted player.
@@ -161,6 +162,22 @@ export default function MatchCard({
     }
   }
 
+  function isReported(p: Player): boolean {
+    return reportedOverride[p.id] ?? p.reported;
+  }
+
+  async function toggleReported(p: Player) {
+    const next = !isReported(p);
+    setReportedOverride((prev) => ({ ...prev, [p.id]: next }));
+    try {
+      await api.reportPlayer(p.id, next);
+      onChanged();
+    } catch (e) {
+      setReportedOverride((prev) => ({ ...prev, [p.id]: !next }));
+      setError(e instanceof Error ? e.message : "Failed.");
+    }
+  }
+
   async function saveTime() {
     try {
       await api.setSchedule(match.id, time);
@@ -211,6 +228,9 @@ export default function MatchCard({
             {p && isNoShow(p) && (
               <span className="text-[9px] uppercase bg-red-100 text-red-700 px-1 rounded">no show</span>
             )}
+            {p && isReported(p) && (
+              <span className="text-[9px] uppercase bg-emerald-100 text-emerald-700 px-1 rounded">Present</span>
+            )}
             {p?.phone && (
               <a
                 href={`tel:${p.phone}`}
@@ -260,6 +280,17 @@ export default function MatchCard({
               }`}
             >
               NS
+            </button>
+            <button
+              onClick={() => toggleReported(p)}
+              title="Mark as reported (present)"
+              className={`text-[10px] px-1 py-0.5 rounded border leading-none ${
+                isReported(p)
+                  ? "bg-emerald-100 border-emerald-300 text-emerald-700 font-medium"
+                  : "border-slate-200 text-slate-400 hover:border-emerald-200"
+              }`}
+            >
+              ✓
             </button>
           </>
         )}

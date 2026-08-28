@@ -73,6 +73,7 @@ class Player(Base):
     flagged: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     flag_note: Mapped[str | None] = mapped_column(String(300))
     no_show: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    reported: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     entry_timestamp: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
