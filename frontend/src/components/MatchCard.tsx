@@ -69,31 +69,73 @@ export default function MatchCard({
   // half-typed.
   const dirtyRef = useRef(false);
 
-  // Bring a searched-for tie onto the screen. Both the phone and the desktop
-  // layouts render every card, but the copy that isn't in play is display:none,
-  // where scrollIntoView is a no-op — so only the visible one actually moves,
-  // and it moves whichever container is scrollable (the page on phones, the
-  // horizontal round strip on desktop).
+  // Bring a searched-for tie onto the screen and keep it there.
+  //
+  // Both the phone and desktop layouts render every card; the copy that isn't in
+  // play is display:none, where scrollIntoView is a no-op — so only the visible
+  // one moves, and it moves whichever container is scrollable (the page on
+  // phones, the horizontal round strip on desktop).
+  //
+  // A single scroll isn't enough to be reliable: switching to a taller bracket
+  // reflows the page right after we scroll (leaving the card off-screen again),
+  // and a smooth scroll silently stalls wherever the page isn't producing frames
+  // (a backgrounded tab, reduced-motion, some mobile browsers). So we verify and
+  // re-correct for ~1.5s, and treat a card hidden behind the sticky header as
+  // "not there yet" — that header is what makes a naive scroll land in the wrong
+  // spot. We stop the moment the card is comfortably in view, so it never fights
+  // the user once they can see it.
   useEffect(() => {
     if (!highlight) return;
     const el = cardRef.current;
     if (!el) return;
     const reduced = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
-    const into = (behavior: ScrollBehavior) =>
-      el.scrollIntoView({ behavior, block: "center", inline: "center" });
 
-    into(reduced ? "auto" : "smooth");
-    if (reduced) return;
-    // A smooth scroll only advances while the page is producing frames — in a
-    // background tab, or anywhere animations are suppressed, it silently never
-    // arrives. Check, and snap if it didn't: landing on the tie matters more
-    // than gliding there.
-    const h = window.setTimeout(() => {
+    let cancelled = false;
+    let tries = 0;
+
+    // Bottom edge of whatever sticky bars are pinned to the top right now
+    // (header + the search/tabs/toolbar block), so we don't count a card as
+    // visible while it's actually tucked underneath them.
+    const stickyBottom = (): number => {
+      let bottom = 0;
+      document.querySelectorAll<HTMLElement>(".sticky").forEach((bar) => {
+        const r = bar.getBoundingClientRect();
+        if (r.top <= 1 && r.height > 0) bottom = Math.max(bottom, r.bottom);
+      });
+      return bottom;
+    };
+
+    // null = this copy is the hidden (display:none) one; true = needs scrolling
+    // (off-screen or under the header); false = comfortably in view.
+    const offScreen = (): boolean | null => {
+      if (el.offsetParent === null) return null;
       const r = el.getBoundingClientRect();
-      const onScreen = r.top >= 0 && r.bottom <= window.innerHeight;
-      if (!onScreen && el.offsetParent !== null) into("auto");
-    }, 700);
-    return () => window.clearTimeout(h);
+      if (r.height === 0) return null;
+      return r.bottom <= stickyBottom() + 8 || r.top >= window.innerHeight - 8;
+    };
+
+    const step = () => {
+      if (cancelled) return;
+      const state = offScreen();
+      if (state === null || state === false) return; // hidden copy, or already visible
+      el.scrollIntoView({
+        behavior: tries === 0 && !reduced ? "smooth" : "auto",
+        block: "center",
+        inline: "center",
+      });
+      tries += 1;
+      // Re-check with setTimeout (which fires even when the tab isn't painting,
+      // unlike rAF or a smooth scroll): if the first, smooth scroll stalled or a
+      // reflow moved the card, the next tick snaps it into place.
+      if (tries < 8) window.setTimeout(step, 200);
+    };
+
+    // useEffect already runs after layout, so measure and scroll straight away —
+    // don't defer the first attempt behind a frame that a hidden tab never draws.
+    step();
+    return () => {
+      cancelled = true;
+    };
   }, [highlight]);
 
   useEffect(() => {

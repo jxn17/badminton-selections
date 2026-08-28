@@ -60,8 +60,9 @@ export default function Bracket({ data, editable, onChanged, onCountsChanged, fo
     setMobileRound(target.round_number);
     setHighlighted(focus);
     // Let the ring fade once it has done its job, so it doesn't linger as
-    // permanent chrome on a card the admin is now editing.
-    const h = window.setTimeout(() => setHighlighted(null), 5000);
+    // permanent chrome on a card the admin is now editing. Long enough to still
+    // be showing after the scroll (which may take ~1s) settles.
+    const h = window.setTimeout(() => setHighlighted(null), 7000);
     return () => window.clearTimeout(h);
   }, [focus, matches]);
 
