@@ -7,6 +7,7 @@ import LoginBar from "./components/LoginBar";
 import FlaggedList from "./components/FlaggedList";
 import RosterList from "./components/RosterList";
 import SearchBar from "./components/SearchBar";
+import MatchScheduler from "./components/MatchScheduler";
 
 interface Selection {
   category: Category;
@@ -21,7 +22,7 @@ export default function App() {
   const [data, setData] = useState<BracketData | null>(null);
   const [loading, setLoading] = useState(true);
   const [showLogin, setShowLogin] = useState(false);
-  const [view, setView] = useState<"bracket" | "flagged" | "roster">("bracket");
+  const [view, setView] = useState<"bracket" | "flagged" | "roster" | "scheduler">("bracket");
   const [flaggedCount, setFlaggedCount] = useState(0);
   const [highlightPlayerId, setHighlightPlayerId] = useState<number | null>(null);
   const timer = useRef<number | null>(null);
@@ -219,6 +220,14 @@ export default function App() {
               >
                 ⭐ Shortlist<span className="ml-1 text-[10px] opacity-80">{flaggedCount}</span>
               </button>
+              <button
+                onClick={() => setView((v) => (v === "scheduler" ? "bracket" : "scheduler"))}
+                className={`px-3 py-1.5 text-sm rounded-md border ${
+                  view === "scheduler" ? "bg-indigo-500 text-white border-indigo-500" : "bg-white text-slate-600 border-slate-200"
+                }`}
+              >
+                📅 Scheduler
+              </button>
             </>
           )}
 
@@ -253,6 +262,13 @@ export default function App() {
               Full entrant roster with phone numbers. Filter by men or women.
             </div>
             <RosterList editable={auth.isAdmin} onChanged={refresh} />
+          </div>
+        ) : view === "scheduler" ? (
+          <div className="mt-4">
+            <div className="text-sm text-slate-500 mb-3">
+              Schedule upcoming or scheduled matches by selecting them or pasting phone numbers.
+            </div>
+            <MatchScheduler editable={auth.isAdmin} onChanged={refresh} />
           </div>
         ) : (
           <>

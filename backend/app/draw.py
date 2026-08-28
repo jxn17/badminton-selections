@@ -33,6 +33,7 @@ from dataclasses import dataclass, field
 from sqlalchemy.orm import Session
 
 from .models import Match, MatchStatus, Player, Tournament
+from .scoring import check_and_apply_no_shows
 
 
 def next_power_of_two(n: int) -> int:
@@ -253,4 +254,11 @@ def generate_draw(db: Session, tournament: Tournament, seed: int | None = None) 
     tournament.num_byes = plan.num_byes
     tournament.draw_seed = seed
     db.flush()
+
+    # Apply no-shows to the newly generated matches round-by-round
+    for r_idx in range(len(plan.rounds)):
+        for mp in plan.rounds[r_idx]:
+            match = created[r_idx][mp.position]
+            check_and_apply_no_shows(db, match)
+
     return tournament

@@ -203,6 +203,47 @@ def _slot_is_a(match: Match) -> bool:
     return match.position_in_round % 2 == 0
 
 
+def is_noshow_completed(match: Match | None) -> bool:
+    if match is None:
+        return False
+    return (
+        match.status == MatchStatus.completed
+        and match.winner_id is not None
+        and len(match.games) == 0
+        and match.retired_player_id is None
+        and (
+            (match.player_a is not None and match.player_a.no_show) or
+            (match.player_b is not None and match.player_b.no_show)
+        )
+    )
+
+
+def check_and_apply_no_shows(db: Session, match: Match) -> None:
+    """If one of the players in the match is a no-show, make the other player the winner."""
+    if match.status == MatchStatus.completed or match.winner_id is not None:
+        return
+    if match.is_bye:
+        return
+
+    player_a = match.player_a
+    player_b = match.player_b
+
+    player_a_noshow = player_a is not None and player_a.no_show
+    player_b_noshow = player_b is not None and player_b.no_show
+
+    if player_a_noshow and player_b_noshow:
+        return
+
+    if player_a_noshow and match.player_b_id is not None:
+        match.winner_id = match.player_b_id
+        match.status = MatchStatus.completed
+        _advance(db, match)
+    elif player_b_noshow and match.player_a_id is not None:
+        match.winner_id = match.player_a_id
+        match.status = MatchStatus.completed
+        _advance(db, match)
+
+
 def _advance(db: Session, match: Match) -> None:
     if match.next_match_id is None:
         return
@@ -213,6 +254,8 @@ def _advance(db: Session, match: Match) -> None:
         nxt.player_a_id = match.winner_id
     else:
         nxt.player_b_id = match.winner_id
+    db.flush()
+    check_and_apply_no_shows(db, nxt)
 
 
 def _withdraw(db: Session, match: Match) -> None:
@@ -225,6 +268,12 @@ def _withdraw(db: Session, match: Match) -> None:
     nxt = db.get(Match, match.next_match_id)
     if nxt is None:
         return
+
+    if is_noshow_completed(nxt):
+        _withdraw(db, nxt)
+        nxt.winner_id = None
+        nxt.status = MatchStatus.pending
+
     if _slot_is_a(match):
         nxt.player_a_id = None
     else:
@@ -237,9 +286,12 @@ def _guard_downstream_editable(db: Session, match: Match) -> None:
         return
     nxt = db.get(Match, match.next_match_id)
     if _is_started(nxt):
-        raise ScoringError(
-            "The next-round match has already started. Reset it first before changing this result."
-        )
+        if is_noshow_completed(nxt):
+            _guard_downstream_editable(db, nxt)
+        else:
+            raise ScoringError(
+                "The next-round match has already started. Reset it first before changing this result."
+            )
 
 
 def apply_scores(

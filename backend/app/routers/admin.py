@@ -17,6 +17,9 @@ from ..scoring import (
     apply_scores,
     clear_retirement,
     set_retirement,
+    check_and_apply_no_shows,
+    _guard_downstream_editable,
+    _withdraw,
 )
 from ..service import (
     add_walkin,
@@ -254,6 +257,31 @@ def no_show_player(player_id: int, body: NoShowIn, db: Session = Depends(get_db)
     before = {"no_show": p.no_show}
     p.no_show = body.no_show
     record(db, admin, "no_show_player", "player", p.id, before, {"no_show": p.no_show})
+
+    if p.no_show:
+        # Find all matches this player is in and apply the no-show logic
+        matches = db.query(Match).filter(
+            (Match.player_a_id == p.id) | (Match.player_b_id == p.id)
+        ).all()
+        for m in matches:
+            check_and_apply_no_shows(db, m)
+    else:
+        # If toggled off, find matches completed due to no-show and revert them
+        matches = db.query(Match).filter(
+            (Match.player_a_id == p.id) | (Match.player_b_id == p.id)
+        ).all()
+        for m in matches:
+            if m.status == MatchStatus.completed and m.winner_id is not None and not m.games and m.retired_player_id is None:
+                opponent_id = m.player_b_id if m.player_a_id == p.id else m.player_a_id
+                if m.winner_id == opponent_id:
+                    try:
+                        _guard_downstream_editable(db, m)
+                    except ScoringError as exc:
+                        raise HTTPException(409, detail={"message": str(exc)})
+                    _withdraw(db, m)
+                    m.winner_id = None
+                    m.status = MatchStatus.pending
+
     db.commit()
     return {"id": p.id, "no_show": p.no_show}
 

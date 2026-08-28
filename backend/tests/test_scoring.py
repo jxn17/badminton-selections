@@ -260,3 +260,87 @@ def test_21_point_game_still_works_with_alt(db):
     assert m.status == MatchStatus.completed
     assert m.winner_id == winner_id
 
+
+def test_noshow_advances_opponent(db):
+    t = _setup(db, n=8, seed=3)
+    r1 = _round(db, t, 1)
+    m = next(m for m in r1 if not m.is_bye)
+    p_noshow = db.get(Player, m.player_a_id)
+    opponent_id = m.player_b_id
+
+    p_noshow.no_show = True
+    from app.scoring import check_and_apply_no_shows
+    check_and_apply_no_shows(db, m)
+    db.commit()
+
+    assert m.status == MatchStatus.completed
+    assert m.winner_id == opponent_id
+    nxt = db.get(Match, m.next_match_id)
+    slot_is_a = m.position_in_round % 2 == 0
+    assert (nxt.player_a_id if slot_is_a else nxt.player_b_id) == opponent_id
+
+
+def test_noshow_recursively_advances_on_scoring(db):
+    t = _setup(db, n=8, seed=3)
+    r1 = _round(db, t, 1)
+    m0 = r1[0]
+    m1 = r1[1]
+
+    p_c = db.get(Player, m1.player_a_id)
+    p_d = db.get(Player, m1.player_b_id)
+
+    p_c.no_show = True
+    from app.scoring import check_and_apply_no_shows
+    check_and_apply_no_shows(db, m1)
+
+    p_d.no_show = True
+    apply_scores(db, m0, [GameInput(1, 15, 9)], "admin@test.dev")
+    db.commit()
+
+    nxt = db.get(Match, m0.next_match_id)
+    assert nxt.player_b_id == p_d.id
+    assert nxt.status == MatchStatus.completed
+    assert nxt.winner_id == m0.winner_id
+
+    nxt2 = db.get(Match, nxt.next_match_id)
+    assert nxt2 is not None
+    slot_is_a2 = nxt.position_in_round % 2 == 0
+    assert (nxt2.player_a_id if slot_is_a2 else nxt2.player_b_id) == m0.winner_id
+
+
+def test_noshow_toggle_off_reverts(db):
+    t = _setup(db, n=8, seed=3)
+    r1 = _round(db, t, 1)
+    m = next(m for m in r1 if not m.is_bye)
+    p_noshow = db.get(Player, m.player_a_id)
+    opponent_id = m.player_b_id
+
+    p_noshow.no_show = True
+    from app.scoring import check_and_apply_no_shows
+    check_and_apply_no_shows(db, m)
+    db.commit()
+    assert m.status == MatchStatus.completed
+    assert m.winner_id == opponent_id
+
+    p_noshow.no_show = False
+    if not p_noshow.no_show:
+        matches = db.query(Match).filter(
+            (Match.player_a_id == p_noshow.id) | (Match.player_b_id == p_noshow.id)
+        ).all()
+        for match in matches:
+            if match.status == MatchStatus.completed and match.winner_id is not None and not match.games and match.retired_player_id is None:
+                opp_id = match.player_b_id if match.player_a_id == p_noshow.id else match.player_a_id
+                if match.winner_id == opp_id:
+                    from app.scoring import _guard_downstream_editable, _withdraw
+                    _guard_downstream_editable(db, match)
+                    _withdraw(db, match)
+                    match.winner_id = None
+                    match.status = MatchStatus.pending
+    db.commit()
+
+    assert m.status == MatchStatus.pending
+    assert m.winner_id is None
+    nxt = db.get(Match, m.next_match_id)
+    slot_is_a = m.position_in_round % 2 == 0
+    assert (nxt.player_a_id if slot_is_a else nxt.player_b_id) is None
+
