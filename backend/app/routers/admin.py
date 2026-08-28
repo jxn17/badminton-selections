@@ -133,12 +133,7 @@ def clear_men_draws_endpoint(db: Session = Depends(get_db), admin: str = Depends
     for t in tournaments:
         if t.status == TournamentStatus.locked:
             continue
-        for m in list(t.matches):
-            db.delete(m)
-        t.bracket_size = None
-        t.num_byes = None
-        t.draw_seed = None
-        t.status = TournamentStatus.draft
+        db.delete(t)
         if t.group_label:
             cleared_groups.append(t.group_label)
             

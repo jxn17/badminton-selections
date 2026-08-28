@@ -171,13 +171,11 @@ def test_clear_men_draws(db):
     from app.routers.admin import clear_men_draws_endpoint
     res = clear_men_draws_endpoint(db, admin="admin@test.dev")
 
-    # Verify matches are deleted, bracket values reset
+    # Verify tournament and matches are deleted
+    t_after = db.query(Tournament).filter(Tournament.id == t.id).first()
+    assert t_after is None
     matches_after = db.query(Match).filter(Match.tournament_id == t.id).all()
     assert len(matches_after) == 0
-    assert t.bracket_size is None
-    assert t.num_byes is None
-    assert t.draw_seed is None
-    assert t.status == TournamentStatus.draft
 
     # Verify players' group labels are reset to None
     players_after = db.query(Player).filter(Player.category == Category.men).all()
