@@ -43,6 +43,31 @@ def _build_header_map(fieldnames: list[str]) -> dict[str, str]:
     return mapping
 
 
+# A phone-shaped run: optional leading +, then digits/horizontal-space/hyphens
+# totalling
+# at least 10 significant characters. This is deliberately permissive (it will
+# also match things like a 10+ digit registration number embedded in text) --
+# callers MUST verify each candidate resolves to a real, known player before
+# acting on it. That check is what actually filters out false positives; the
+# regex only needs to find "the phone-looking bits" among free-form pasted text
+# (e.g. a WhatsApp export with names, numbers, and other punctuation mixed in).
+_PHONE_CANDIDATE_RE = re.compile(r"[+]?\d[\d \t\-]{8,14}\d")
+
+
+def extract_candidate_phones(text: str) -> list[str]:
+    """Pull phone-shaped substrings out of arbitrary pasted text, in order,
+    without duplicates. Each candidate still needs normalize_phone() + a real
+    Player lookup before it's trusted."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for m in _PHONE_CANDIDATE_RE.finditer(text or ""):
+        raw = m.group(0)
+        if raw not in seen:
+            seen.add(raw)
+            out.append(raw)
+    return out
+
+
 def normalize_phone(raw: str | None) -> str | None:
     """Digits only, drop +91/91/leading 0, keep last 10. None if <10 remain."""
     if not raw:

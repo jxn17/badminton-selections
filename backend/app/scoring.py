@@ -247,6 +247,7 @@ def apply_scores(
         )
 
     match.retired_player_id = None  # entering real scores clears any RET flag
+    match.no_show_player_id = None  # ...and any no-show flag
     match.winner_id = new_winner
     if new_winner is not None:
         match.status = MatchStatus.completed
@@ -279,11 +280,51 @@ def set_retirement(
         _withdraw(db, match)
 
     match.retired_player_id = retired_player_id
+    match.no_show_player_id = None
     match.winner_id = winner
     match.status = MatchStatus.completed
     _advance(db, match)
     db.flush()
     return match
+
+
+def set_no_show(db: Session, match: Match, no_show_player_id: int, admin_email: str) -> Match:
+    """Mark a player as not having shown up: the opponent wins immediately.
+
+    Distinct from RET — a no-show means the match never started at all, so any
+    previously-entered partial score is discarded (RET keeps it). Overrides the
+    win-by-two rule the same way RET does.
+    """
+    if match.is_bye:
+        raise ScoringError("Bye matches are decided automatically.")
+    if match.player_a_id is None or match.player_b_id is None:
+        raise ScoringError("Both players must be present to record a no-show.")
+    if no_show_player_id not in (match.player_a_id, match.player_b_id):
+        raise ScoringError("That player is not part of this match.")
+
+    winner = (
+        match.player_b_id if no_show_player_id == match.player_a_id else match.player_a_id
+    )
+    if winner != match.winner_id and match.winner_id is not None:
+        _guard_downstream_editable(db, match)
+        _withdraw(db, match)
+
+    for g in list(match.games):
+        db.delete(g)
+    db.flush()
+
+    match.retired_player_id = None
+    match.no_show_player_id = no_show_player_id
+    match.winner_id = winner
+    match.status = MatchStatus.completed
+    _advance(db, match)
+    db.flush()
+    return match
+
+
+def clear_no_show(db: Session, match: Match, admin_email: str) -> Match:
+    """Undo a no-show: back to pending (no games were kept to recompute from)."""
+    return apply_scores(db, match, [], admin_email)
 
 
 def clear_retirement(db: Session, match: Match, admin_email: str) -> Match:

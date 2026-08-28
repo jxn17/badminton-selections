@@ -7,7 +7,13 @@ interface Props {
   players: Map<number, Player>;
   format: RoundFormat;
   editable: boolean;
-  onChanged: () => void;
+  // Per-match actions (score/RET/no-show/reset/schedule) patch the bracket
+  // locally from their own response — no full refetch, so the result shows up
+  // as fast as the network round-trip for that one small request.
+  onMatchUpdated: (updated: Partial<Match> & { id: number }) => void;
+  // Flag/report only need to eventually update counts shown elsewhere (the
+  // shortlist badge); the star/check itself flips instantly via local state.
+  onCountsChanged: () => void;
   swapMode: boolean;
   selectedForSwap: number | null;
   onSelectForSwap: (playerId: number) => void;
@@ -19,12 +25,22 @@ interface CellPair {
   b: string;
 }
 
+function errText(e: unknown, fallback: string): string {
+  if (e instanceof ApiError) {
+    const d = e.detail;
+    if (typeof d === "string") return d;
+    if (d && typeof d === "object" && "message" in (d as any)) return (d as any).message;
+  }
+  return e instanceof Error ? e.message : fallback;
+}
+
 export default function MatchCard({
   match,
   players,
   format,
   editable,
-  onChanged,
+  onMatchUpdated,
+  onCountsChanged,
   swapMode,
   selectedForSwap,
   onSelectForSwap,
@@ -36,9 +52,10 @@ export default function MatchCard({
   const [errorGame, setErrorGame] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
   const [time, setTime] = useState(match.scheduled_time ?? "");
-  // Local override so the star flips the instant it is clicked, before the
-  // server round-trip and bracket refetch land.
+  // Local overrides so the star/check flip instantly, before the network round
+  // trip lands — these are per-player UI signals, not match state.
   const [flagOverride, setFlagOverride] = useState<Record<number, boolean>>({});
+  const [reportedOverride, setReportedOverride] = useState<Record<number, boolean>>({});
 
   // True while this admin has unsaved edits in the score boxes. The bracket
   // refetches every 15s; without this guard that refetch would wipe whatever is
@@ -58,6 +75,11 @@ export default function MatchCard({
 
   const winnerId = match.winner_id;
   const retiredId = match.retired_player_id;
+  const noShowId = match.no_show_player_id;
+
+  function patch(server: Partial<Match>) {
+    onMatchUpdated({ ...match, ...server, id: match.id });
+  }
 
   async function save() {
     setSaving(true);
@@ -69,15 +91,15 @@ export default function MatchCard({
         games.push({ game_number: i + 1, score_a: Number(c.a), score_b: Number(c.b) });
     });
     try {
-      await api.updateScore(match.id, games);
+      const updated = await api.updateScore(match.id, games);
       dirtyRef.current = false; // server now matches what's on screen
-      onChanged();
+      patch(updated);
     } catch (e) {
       if (e instanceof ApiError && e.detail && typeof e.detail === "object") {
         const d = e.detail as { message?: string; game_number?: number };
         setError(d.message ?? "Invalid score.");
         setErrorGame(d.game_number ?? null);
-      } else setError(e instanceof Error ? e.message : "Failed to save.");
+      } else setError(errText(e, "Failed to save."));
     } finally {
       setSaving(false);
     }
@@ -87,21 +109,31 @@ export default function MatchCard({
     if (pid === null) return;
     setError(null);
     try {
-      if (retiredId === pid) await api.unretire(match.id);
-      else await api.retire(match.id, pid);
-      onChanged();
+      const updated = retiredId === pid ? await api.unretire(match.id) : await api.retire(match.id, pid);
+      patch(updated);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed.");
+      setError(errText(e, "Failed."));
+    }
+  }
+
+  async function toggleNoShow(pid: number | null) {
+    if (pid === null) return;
+    setError(null);
+    try {
+      const updated = noShowId === pid ? await api.clearNoShow(match.id) : await api.noShow(match.id, pid);
+      patch(updated);
+    } catch (e) {
+      setError(errText(e, "Failed."));
     }
   }
 
   async function reset() {
     setError(null);
     try {
-      await api.resetMatch(match.id);
-      onChanged();
+      const updated = await api.resetMatch(match.id);
+      patch(updated);
     } catch (e) {
-      setError(e instanceof ApiError ? String(e.detail) : "Failed to reset.");
+      setError(errText(e, "Failed to reset."));
     }
   }
 
@@ -110,24 +142,39 @@ export default function MatchCard({
     setFlagOverride((prev) => ({ ...prev, [p.id]: next }));
     try {
       await api.flagPlayer(p.id, next);
-      onChanged();
+      onCountsChanged();
     } catch (e) {
       // Roll the star back if the server rejected it.
       setFlagOverride((prev) => ({ ...prev, [p.id]: !next }));
-      setError(e instanceof Error ? e.message : "Failed.");
+      setError(errText(e, "Failed."));
+    }
+  }
+
+  async function toggleReported(p: Player) {
+    const next = !isReported(p);
+    setReportedOverride((prev) => ({ ...prev, [p.id]: next }));
+    try {
+      await api.reportPlayer(p.id, next);
+      onCountsChanged();
+    } catch (e) {
+      setReportedOverride((prev) => ({ ...prev, [p.id]: !next }));
+      setError(errText(e, "Failed."));
     }
   }
 
   function isFlagged(p: Player): boolean {
     return flagOverride[p.id] ?? p.flagged;
   }
+  function isReported(p: Player): boolean {
+    return reportedOverride[p.id] ?? p.reported;
+  }
 
   async function saveTime() {
     try {
-      await api.setSchedule(match.id, time);
-      onChanged();
+      const updated = await api.setSchedule(match.id, time);
+      patch(updated);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed.");
+      setError(errText(e, "Failed."));
     }
   }
 
@@ -145,6 +192,7 @@ export default function MatchCard({
     const p = id !== null ? players.get(id) ?? null : null;
     const isWinner = id !== null && id === winnerId;
     const isRetired = id !== null && id === retiredId;
+    const isNoShow = id !== null && id === noShowId;
     const isByeSlot = match.is_bye && id === null;
     const tag = p ? expTag(p.experience_level) : null;
     const selected = id !== null && selectedForSwap === id;
@@ -198,8 +246,20 @@ export default function MatchCard({
         {isRetired && (
           <span className="text-[10px] font-semibold text-amber-700 bg-amber-100 px-1.5 py-0.5 rounded">RET</span>
         )}
+        {isNoShow && (
+          <span className="text-[10px] font-semibold text-red-700 bg-red-100 px-1.5 py-0.5 rounded">NO SHOW</span>
+        )}
         {match.is_bye && id === winnerId && (
           <span className="text-[10px] font-semibold text-slate-600 bg-slate-100 px-1.5 py-0.5 rounded">BYE</span>
+        )}
+        {editable && p && (
+          <button
+            onClick={() => toggleReported(p)}
+            title={isReported(p) ? "Reported — click to unmark" : "Mark as reported / checked in"}
+            className={`text-sm leading-none px-0.5 ${isReported(p) ? "text-emerald-600" : "text-slate-300 hover:text-emerald-500"}`}
+          >
+            ✓
+          </button>
         )}
         {editable && p && (
           <button
@@ -300,6 +360,24 @@ export default function MatchCard({
               }`}
             >
               RET B
+            </button>
+            <button
+              onClick={() => toggleNoShow(match.player_a_id)}
+              disabled={match.player_a_id === null}
+              className={`text-xs px-2 py-1 rounded border ${
+                noShowId === match.player_a_id ? "bg-red-100 border-red-300 text-red-800" : "border-slate-200 text-slate-600"
+              }`}
+            >
+              No-show A
+            </button>
+            <button
+              onClick={() => toggleNoShow(match.player_b_id)}
+              disabled={match.player_b_id === null}
+              className={`text-xs px-2 py-1 rounded border ${
+                noShowId === match.player_b_id ? "bg-red-100 border-red-300 text-red-800" : "border-slate-200 text-slate-600"
+              }`}
+            >
+              No-show B
             </button>
             {(match.status === "completed" || match.games.length > 0) && (
               <button onClick={reset} className="text-xs px-2 py-1 rounded border border-slate-200 text-slate-500">

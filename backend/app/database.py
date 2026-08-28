@@ -39,3 +39,27 @@ def get_db() -> Iterator[Session]:
         yield db
     finally:
         db.close()
+
+
+def ensure_incremental_migrations(bind) -> None:
+    """Add columns introduced after the app first went live.
+
+    There's no Alembic here, and Base.metadata.create_all() only creates tables
+    that don't exist yet — it never alters an existing table. On a live Postgres
+    (with real tournament data already in it) that means a new column on an
+    existing model needs an explicit, additive ALTER TABLE. This is intentionally
+    tiny and append-only: every statement is idempotent (IF NOT EXISTS) and never
+    drops or rewrites data. SQLite (tests/local scratch DBs) is always created
+    fresh via create_all, which already includes new columns, so it's skipped.
+    """
+    if bind.dialect.name != "postgresql":
+        return
+    from sqlalchemy import text
+
+    statements = [
+        "ALTER TABLE players ADD COLUMN IF NOT EXISTS reported BOOLEAN NOT NULL DEFAULT FALSE",
+        "ALTER TABLE matches ADD COLUMN IF NOT EXISTS no_show_player_id INTEGER REFERENCES players(id)",
+    ]
+    with bind.begin() as conn:
+        for stmt in statements:
+            conn.execute(text(stmt))

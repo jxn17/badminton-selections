@@ -15,7 +15,9 @@ from ..scoring import (
     GameInput,
     ScoringError,
     apply_scores,
+    clear_no_show,
     clear_retirement,
+    set_no_show,
     set_retirement,
 )
 from ..service import (
@@ -26,13 +28,17 @@ from ..service import (
     rebuild_women,
     remove_player,
     schedule_day,
+    schedule_specific_players,
     swap_players,
 )
 from ..schemas import (
     ClearScheduleIn,
     FlagIn,
     MoveToGroupIn,
+    NoShowIn,
+    ReportIn,
     ScheduleDayIn,
+    ScheduleSpecificIn,
     GenerateDrawIn,
     RetireIn,
     RoundFormatIn,
@@ -190,6 +196,7 @@ def reset_match(match_id: int, db: Session = Depends(get_db), admin: str = Depen
         db.delete(g)
     m.winner_id = None
     m.retired_player_id = None
+    m.no_show_player_id = None
     m.status = MatchStatus.pending
     record(db, admin, "reset_match", "match", m.id, before, match_snapshot(m))
     db.commit()
@@ -209,6 +216,61 @@ def set_schedule(match_id: int, body: ScheduleIn, db: Session = Depends(get_db),
 # --------------------------------------------------------------------------
 # Roster: flag/shortlist, swap, walk-ins
 # --------------------------------------------------------------------------
+@router.post("/matches/{match_id}/no-show")
+def no_show(match_id: int, body: NoShowIn, db: Session = Depends(get_db), admin: str = Depends(require_admin)):
+    m = _match(db, match_id)
+    before = match_snapshot(m)
+    try:
+        set_no_show(db, m, body.no_show_player_id, admin)
+    except ScoringError as exc:
+        _scoring_error(exc)
+    record(db, admin, "no_show", "match", m.id, before, match_snapshot(m))
+    db.commit()
+    return match_snapshot(m)
+
+
+@router.delete("/matches/{match_id}/no-show")
+def clear_no_show_ep(match_id: int, db: Session = Depends(get_db), admin: str = Depends(require_admin)):
+    m = _match(db, match_id)
+    before = match_snapshot(m)
+    try:
+        clear_no_show(db, m, admin)
+    except ScoringError as exc:
+        _scoring_error(exc)
+    record(db, admin, "clear_no_show", "match", m.id, before, match_snapshot(m))
+    db.commit()
+    return match_snapshot(m)
+
+
+@router.post("/players/{player_id}/report")
+def report_player(player_id: int, body: ReportIn, db: Session = Depends(get_db), admin: str = Depends(require_admin)):
+    p = db.get(Player, player_id)
+    if p is None:
+        raise HTTPException(404, "Player not found.")
+    before = {"reported": p.reported}
+    p.reported = body.reported
+    record(db, admin, "report_player", "player", p.id, before, {"reported": p.reported})
+    db.commit()
+    return {"id": p.id, "reported": p.reported}
+
+
+@router.post("/schedule-specific")
+def schedule_specific_ep(
+    body: ScheduleSpecificIn, db: Session = Depends(get_db), admin: str = Depends(require_admin)
+):
+    """Paste free text (e.g. a WhatsApp export) — phone numbers are auto-detected
+    and each matched player's current match is scheduled onto the given window."""
+    try:
+        result = schedule_specific_players(
+            db, body.text, body.day_label, body.start, body.courts, body.minutes_per_match
+        )
+    except ScoringError as exc:
+        _scoring_error(exc)
+    record(db, admin, "schedule_specific", "match", None, after=result)
+    db.commit()
+    return result
+
+
 @router.post("/players/{player_id}/flag")
 def flag_player(player_id: int, body: FlagIn, db: Session = Depends(get_db), admin: str = Depends(require_admin)):
     p = db.get(Player, player_id)

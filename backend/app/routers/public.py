@@ -33,6 +33,7 @@ def player_out(p: Player, include_pii: bool) -> PlayerOut:
         is_walkin=p.is_walkin,
         flagged=(p.flagged if include_pii else False),
         flag_note=(p.flag_note if include_pii else None),
+        reported=(p.reported if include_pii else False),
         # Normalized = clean last-10-digits (drops +91 / spaces / leading 0).
         phone=(p.phone_normalized if include_pii else None),
         registration_number=(p.registration_number if include_pii else None),
@@ -143,6 +144,7 @@ def search_players(request: Request, q: str = "", db: Session = Depends(get_db))
                 "group_label": p.group_label,
                 "experience_level": p.experience_level,
                 "phone": p.phone_normalized if include_pii else None,
+                "reported": p.reported if include_pii else False,
                 "matches": match_infos,
             }
         )

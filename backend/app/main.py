@@ -9,7 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 
 from .config import get_settings
-from .database import Base, engine
+from .database import Base, engine, ensure_incremental_migrations
 from .routers import admin, auth_routes, public
 
 settings = get_settings()
@@ -52,6 +52,7 @@ def on_startup() -> None:
             with engine.connect() as conn:
                 conn.execute(text("SELECT 1"))
             Base.metadata.create_all(bind=engine)
+            ensure_incremental_migrations(engine)
             print(f"[startup] DB ready (attempt {attempt}); schema ensured.", flush=True)
             return
         except Exception as exc:  # noqa: BLE001

@@ -72,6 +72,8 @@ class Player(Base):
     is_walkin: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     flagged: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     flag_note: Mapped[str | None] = mapped_column(String(300))
+    # Checked in at the venue. Admin-only operational flag (not the shortlist star).
+    reported: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     entry_timestamp: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
@@ -118,6 +120,8 @@ class Match(Base):
     is_bye: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     winner_id: Mapped[int | None] = mapped_column(ForeignKey("players.id"))
     retired_player_id: Mapped[int | None] = mapped_column(ForeignKey("players.id"))
+    # Distinct from RET: no-show means the match never started (no partial score).
+    no_show_player_id: Mapped[int | None] = mapped_column(ForeignKey("players.id"))
 
     next_match_id: Mapped[int | None] = mapped_column(ForeignKey("matches.id"))
     status: Mapped[MatchStatus] = mapped_column(

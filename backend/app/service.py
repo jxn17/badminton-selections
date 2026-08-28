@@ -6,7 +6,7 @@ import re
 
 from sqlalchemy.orm import Session
 
-from .csv_import import dedup_key_for, normalize_phone
+from .csv_import import dedup_key_for, extract_candidate_phones, normalize_phone
 from .draw import generate_draw
 from .grouping import GROUP_LABELS, assign_men_groups, experience_rank
 from .models import Category, Match, MatchStatus, Player, RoundFormat, Tournament, TournamentStatus
@@ -598,3 +598,115 @@ def clear_schedule(db: Session, targets: list[dict]) -> dict:
             n += 1
     db.commit()
     return {"cleared": n}
+
+
+# --------------------------------------------------------------------------
+# Schedule specific players by pasting free text (auto-detects phone numbers)
+# --------------------------------------------------------------------------
+def _current_active_match(db: Session, player: Player) -> Match | None:
+    """The match this player is waiting to play right now: their tournament's
+    latest non-bye, not-yet-completed match with both slots filled in. Returns
+    None if they've been eliminated, already finished their run, or their
+    opponent isn't decided yet."""
+    t = (
+        db.query(Tournament)
+        .filter(Tournament.category == player.category)
+        .filter(
+            Tournament.group_label.is_(None)
+            if player.group_label is None
+            else Tournament.group_label == player.group_label
+        )
+        .one_or_none()
+    )
+    if t is None:
+        return None
+    candidates = (
+        db.query(Match)
+        .filter(
+            Match.tournament_id == t.id,
+            Match.is_bye.is_(False),
+            Match.status != MatchStatus.completed,
+            (Match.player_a_id == player.id) | (Match.player_b_id == player.id),
+        )
+        .order_by(Match.round_number.desc())
+        .all()
+    )
+    for m in candidates:
+        if m.player_a_id is not None and m.player_b_id is not None:
+            return m
+    return None
+
+
+def schedule_specific_players(
+    db: Session,
+    text: str,
+    day_label: str,
+    start: str,
+    courts: list[str],
+    minutes_per_match: int,
+) -> dict:
+    """Auto-detect phone numbers in pasted text and lay just THOSE players'
+    current matches onto the given day/courts, back to back. Unlike
+    schedule_day this targets a curated list of people rather than a whole
+    round, e.g. "these specific players confirmed they can play at 4pm."
+    """
+    if not courts:
+        raise ScoringError("Need at least one court.")
+    if minutes_per_match < 1:
+        raise ScoringError("Minutes per match must be at least 1.")
+    start_min = _parse_hhmm(start)
+
+    candidates = extract_candidate_phones(text)
+    if not candidates:
+        raise ScoringError("No phone numbers found in that text.")
+
+    # Resolve each candidate to a known player (this is what actually filters
+    # out false-positive matches like a registration number caught by the regex).
+    normalized_to_raw: dict[str, str] = {}
+    for raw in candidates:
+        norm = normalize_phone(raw)
+        if norm and norm not in normalized_to_raw:
+            normalized_to_raw[norm] = raw
+
+    players_by_norm = {
+        p.phone_normalized: p
+        for p in db.query(Player).filter(Player.phone_normalized.in_(normalized_to_raw.keys())).all()
+    }
+
+    resolved: list[Player] = []
+    not_found: list[str] = []
+    for norm, raw in normalized_to_raw.items():
+        p = players_by_norm.get(norm)
+        if p is None:
+            not_found.append(raw)
+        else:
+            resolved.append(p)
+
+    # One match per player; a match can cover two of the pasted players at
+    # once (they're playing each other) — dedupe by match id, first-seen order.
+    seen_match_ids: set[int] = set()
+    matches: list[Match] = []
+    no_active_match: list[str] = []
+    for p in resolved:
+        m = _current_active_match(db, p)
+        if m is None:
+            no_active_match.append(p.full_name)
+            continue
+        if m.id not in seen_match_ids:
+            seen_match_ids.add(m.id)
+            matches.append(m)
+
+    scheduled = []
+    for i, m in enumerate(matches):
+        slot, court_idx = divmod(i, len(courts))
+        t_min = start_min + slot * minutes_per_match
+        m.scheduled_time = f"{day_label} {_fmt_hhmm(t_min)} {courts[court_idx]}".strip()
+        scheduled.append({"match_id": m.id, "scheduled_time": m.scheduled_time})
+
+    db.commit()
+    return {
+        "scheduled": scheduled,
+        "not_found": not_found,
+        "no_active_match": no_active_match,
+        "finishes_by": _fmt_hhmm(start_min + len(matches) * minutes_per_match) if matches else None,
+    }

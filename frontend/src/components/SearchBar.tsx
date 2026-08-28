@@ -52,6 +52,16 @@ export default function SearchBar({ isAdmin, onPick, onChanged }: Props) {
     }
   }
 
+  async function toggleReported(r: SearchResult) {
+    const next = !r.reported;
+    setResults((prev) => prev.map((x) => (x.id === r.id ? { ...x, reported: next } : x)));
+    try {
+      await api.reportPlayer(r.id, next);
+    } catch {
+      setResults((prev) => prev.map((x) => (x.id === r.id ? { ...x, reported: !next } : x)));
+    }
+  }
+
   const groupLabel = (r: SearchResult) => (r.category === "men" ? `Group ${r.group_label}` : "Women");
 
   return (
@@ -89,6 +99,19 @@ export default function SearchBar({ isAdmin, onPick, onChanged }: Props) {
                     <a href={`tel:${r.phone}`} className="text-xs text-court" title={`Call ${r.full_name}`}>
                       📞
                     </a>
+                  )}
+                  {isAdmin && (
+                    <button
+                      onClick={() => toggleReported(r)}
+                      title={r.reported ? "Reported — click to unmark" : "Mark as reported / checked in"}
+                      className={`text-xs font-medium px-2.5 py-1 rounded-md border ${
+                        r.reported
+                          ? "border-emerald-300 text-emerald-700 bg-emerald-50"
+                          : "border-slate-200 text-slate-500 hover:bg-slate-50"
+                      }`}
+                    >
+                      {r.reported ? "✓ Reported" : "Report"}
+                    </button>
                   )}
                   {isAdmin && (
                     <button

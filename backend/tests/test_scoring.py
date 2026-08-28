@@ -17,8 +17,10 @@ from app.scoring import (
     GameInput,
     ScoringError,
     apply_scores,
+    clear_no_show,
     evaluate_game,
     resolve_format,
+    set_no_show,
     set_retirement,
 )
 
@@ -49,6 +51,47 @@ def fmt(ptw=15, wbt=True, cap=None, games=1):
 )
 def test_evaluate_game(a, b, ptw, wbt, cap, expected):
     assert evaluate_game(fmt(ptw, wbt, cap), a, b).status == expected
+
+
+# --------------------------------------------------------------------------
+# Golden point / sudden death: hard_cap == points_to_win means the game ends
+# the instant either side reaches the target, no matter the margin — i.e. at
+# parity one below the target (14-14 for a 15-point game, 10-10 for 11-point),
+# the very next point decides it. This is the *existing* generic evaluate_game
+# logic; these tests pin down that the trick actually produces "golden point"
+# behaviour for the specific formats the user asked to support.
+# --------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    "ptw,a,b,expected",
+    [
+        # 11-point game, golden point (cap == 11)
+        (11, 10, 10, "incomplete"),  # parity one below target -> not decided yet
+        (11, 11, 10, "a"),           # next point wins outright, no 2-point margin needed
+        (11, 10, 11, "b"),
+        (11, 12, 10, "invalid"),     # game must have ended at 11-10; can't reach 12
+        (11, 9, 8, "incomplete"),    # ordinary live rally, nobody at target
+        # 15-point game, golden point (cap == 15)
+        (15, 14, 14, "incomplete"),
+        (15, 15, 14, "a"),
+        (15, 14, 15, "b"),
+        (15, 16, 14, "invalid"),
+        # 21-point game, golden point (cap == 21) — same trick at badminton's usual length
+        (21, 20, 20, "incomplete"),
+        (21, 21, 20, "a"),
+        (21, 22, 20, "invalid"),
+    ],
+)
+def test_golden_point(ptw, a, b, expected):
+    golden = fmt(ptw=ptw, wbt=True, cap=ptw)  # hard_cap == points_to_win => golden point
+    assert evaluate_game(golden, a, b).status == expected
+
+
+def test_golden_point_does_not_affect_normal_leads():
+    """A side that's already 2+ ahead at the target still wins normally under
+    golden point — the rule only changes what happens exactly AT parity."""
+    golden = fmt(ptw=15, wbt=True, cap=15)
+    assert evaluate_game(golden, 15, 10).status == "a"
+    assert evaluate_game(golden, 15, 13).status == "a"
 
 
 def _setup(db, n=8, seed=1):
@@ -170,3 +213,105 @@ def test_reedit_blocked_when_downstream_started(db):
     # Re-editing m0 to flip its winner must be blocked.
     with pytest.raises(ScoringError):
         apply_scores(db, m0, [GameInput(1, 9, 15)], "admin@test.dev")
+
+
+# --------------------------------------------------------------------------
+# No-show: distinct from RET — the match never started, so no partial score
+# is kept, and the opponent wins immediately.
+# --------------------------------------------------------------------------
+def test_no_show_advances_opponent_with_no_games(db):
+    t = _setup(db, n=8, seed=3)
+    m = next(m for m in _round(db, t, 1) if not m.is_bye)
+    absent = m.player_a_id
+    opponent = m.player_b_id
+
+    set_no_show(db, m, absent, "admin@test.dev")
+    db.commit()
+
+    assert m.winner_id == opponent
+    assert m.no_show_player_id == absent
+    assert m.retired_player_id is None
+    assert m.status == MatchStatus.completed
+    assert len(m.games) == 0  # no-show keeps no partial score (unlike RET)
+    nxt = db.get(Match, m.next_match_id)
+    advanced = nxt.player_a_id if m.position_in_round % 2 == 0 else nxt.player_b_id
+    assert advanced == opponent
+
+
+def test_no_show_discards_any_partial_score_already_entered(db):
+    t = _setup(db, n=8, seed=3)
+    m = next(m for m in _round(db, t, 1) if not m.is_bye)
+    absent = m.player_a_id
+
+    apply_scores(db, m, [GameInput(1, 8, 6)], "admin@test.dev")
+    db.commit()
+    assert len(m.games) == 1
+
+    set_no_show(db, m, absent, "admin@test.dev")
+    db.commit()
+    assert len(m.games) == 0  # no-show clears it, unlike RET which preserves it
+
+
+def test_no_show_and_retire_are_mutually_exclusive(db):
+    t = _setup(db, n=8, seed=3)
+    m = next(m for m in _round(db, t, 1) if not m.is_bye)
+    a, b = m.player_a_id, m.player_b_id
+
+    set_retirement(db, m, a, "admin@test.dev")
+    assert m.retired_player_id == a
+    set_no_show(db, m, b, "admin@test.dev")
+    assert m.no_show_player_id == b
+    assert m.retired_player_id is None  # setting no-show clears a prior RET
+    assert m.winner_id == a  # b (no-show) loses, a wins
+
+
+def test_clear_no_show_returns_to_pending(db):
+    t = _setup(db, n=8, seed=3)
+    m = next(m for m in _round(db, t, 1) if not m.is_bye)
+    absent = m.player_a_id
+
+    set_no_show(db, m, absent, "admin@test.dev")
+    db.commit()
+    clear_no_show(db, m, "admin@test.dev")
+    db.commit()
+
+    assert m.no_show_player_id is None
+    assert m.winner_id is None
+    assert m.status == MatchStatus.pending
+
+
+def test_no_show_blocked_on_bye(db):
+    t = _setup(db, n=7, seed=3)  # odd count guarantees at least one bye
+    m = next(m for m in _round(db, t, 1) if m.is_bye)
+    real_player = m.player_a_id if m.player_a_id is not None else m.player_b_id
+    with pytest.raises(ScoringError):
+        set_no_show(db, m, real_player, "admin@test.dev")
+
+
+def test_no_show_rejects_player_not_in_match(db):
+    t = _setup(db, n=8, seed=3)
+    matches = _round(db, t, 1)
+    m = next(m for m in matches if not m.is_bye)
+    other = next(m2 for m2 in matches if m2.id != m.id and not m2.is_bye)
+    stranger = other.player_a_id
+    with pytest.raises(ScoringError):
+        set_no_show(db, m, stranger, "admin@test.dev")
+
+
+def test_no_show_blocked_when_downstream_started(db):
+    t = _setup(db, n=8, seed=3)
+    r1 = _round(db, t, 1)
+    m0 = next(m for m in r1 if not m.is_bye)
+    sibling = next(m for m in r1 if m.next_match_id == m0.next_match_id and m.id != m0.id)
+    apply_scores(db, m0, [GameInput(1, 15, 9)], "admin@test.dev")
+    apply_scores(db, sibling, [GameInput(1, 15, 9)], "admin@test.dev")
+    db.commit()
+    nxt = db.get(Match, m0.next_match_id)
+    apply_scores(db, nxt, [GameInput(1, 15, 12)], "admin@test.dev")
+    db.commit()
+
+    # m0's winner already advanced into a started match; marking THAT winner as
+    # a no-show would flip the result, which must be blocked, same guard as a
+    # score re-edit that changes the winner.
+    with pytest.raises(ScoringError):
+        set_no_show(db, m0, m0.winner_id, "admin@test.dev")

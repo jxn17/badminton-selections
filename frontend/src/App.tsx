@@ -239,7 +239,7 @@ export default function App() {
                 <div className="text-sm text-slate-500 mb-2">
                   {sel?.category === "men" ? `Men's — Group ${sel?.group}` : "Women's"} · {data.players.length} players
                 </div>
-                <Bracket data={data} editable={auth.isAdmin} onChanged={refresh} />
+                <Bracket data={data} editable={auth.isAdmin} onChanged={refresh} onCountsChanged={loadGroups} />
               </div>
             ) : (
               loading && <div className="py-16 text-center text-slate-400">Loading…</div>

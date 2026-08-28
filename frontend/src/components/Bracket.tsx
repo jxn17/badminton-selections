@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Bracket as BracketData, api } from "../api";
+import { Bracket as BracketData, Match, api } from "../api";
 import { groupByRound, playerMap, resolveFormat, roundName, roundNameShort } from "../bracket";
 import MatchCard from "./MatchCard";
 
@@ -7,10 +7,21 @@ interface Props {
   data: BracketData;
   editable: boolean;
   onChanged: () => void;
+  onCountsChanged?: () => void;
 }
 
-export default function Bracket({ data, editable, onChanged }: Props) {
-  const rounds = groupByRound(data.matches);
+export default function Bracket({ data, editable, onChanged, onCountsChanged }: Props) {
+  // Matches live in local state so a single score/RET/no-show/schedule edit can
+  // be reflected instantly from that action's own response, instead of waiting
+  // on a full bracket refetch (the old flow: PUT score -> GET whole bracket ->
+  // re-render). Re-synced whenever the parent hands us fresh data (initial
+  // load, group switch, the 15s poll, or a bulk admin action like a rebuild).
+  const [matches, setMatches] = useState<Match[]>(data.matches);
+  useEffect(() => {
+    setMatches(data.matches);
+  }, [data.matches]);
+
+  const rounds = groupByRound(matches);
   const roundNumbers = [...rounds.keys()].sort((a, b) => a - b);
   const totalRounds = roundNumbers.length;
   const players = playerMap(data.players);
@@ -25,6 +36,47 @@ export default function Bracket({ data, editable, onChanged }: Props) {
     if (!roundNumbers.includes(mobileRound)) setMobileRound(roundNumbers[0] ?? 1);
   }, [data.tournament.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  /** Apply a single match's update locally: patch it in place, and if it now
+   * has a winner, push that winner into the downstream match's slot right
+   * away (mirroring the server's own advancement) so the next round shows the
+   * result immediately instead of waiting on a refetch. Only ever called with
+   * a response the server already validated, so this can't desync the bracket
+   * — it's just rendering the outcome sooner. */
+  function patchMatch(partial: Partial<Match> & { id: number }) {
+    setMatches((prev) => {
+      const prevMatch = prev.find((m) => m.id === partial.id);
+      const updated: Match = prevMatch ? { ...prevMatch, ...partial } : (partial as Match);
+      let next = prev.map((m) => (m.id === updated.id ? updated : m));
+
+      if (updated.next_match_id != null) {
+        const isA = updated.position_in_round % 2 === 0;
+        next = next.map((m) => {
+          if (m.id !== updated.next_match_id) return m;
+          if (updated.winner_id != null) {
+            return isA ? { ...m, player_a_id: updated.winner_id } : { ...m, player_b_id: updated.winner_id };
+          }
+          // Winner was cleared (reset/re-edit). Only retract if this slot still
+          // holds what THIS match had previously pushed there, so we never
+          // clobber a different, concurrent edit to the downstream match.
+          if (prevMatch?.winner_id != null) {
+            const cur = isA ? m.player_a_id : m.player_b_id;
+            if (cur === prevMatch.winner_id) {
+              return isA ? { ...m, player_a_id: null } : { ...m, player_b_id: null };
+            }
+          }
+          return m;
+        });
+      }
+      return next;
+    });
+  }
+
+  /** Lightweight refresh for things that only affect counts elsewhere (e.g. the
+   * shortlist badge), without paying for a full bracket refetch on every click. */
+  function handleCountsChanged() {
+    (onCountsChanged ?? onChanged)();
+  }
+
   async function onSelectForSwap(pid: number) {
     setSwapMsg(null);
     if (selected === null) return setSelected(pid);
@@ -32,7 +84,7 @@ export default function Bracket({ data, editable, onChanged }: Props) {
     try {
       await api.swap(data.tournament.id, selected, pid);
       setSelected(null);
-      onChanged();
+      onChanged(); // swap restructures two matches' rosters; a full refetch is correct here
       setSwapMsg("Swapped.");
     } catch (e: any) {
       const d = e?.detail;
@@ -41,7 +93,7 @@ export default function Bracket({ data, editable, onChanged }: Props) {
     }
   }
 
-  if (data.matches.length === 0) {
+  if (matches.length === 0) {
     return (
       <div className="text-center py-16 text-slate-500">
         <p className="text-lg">No draw generated yet.</p>
@@ -50,13 +102,14 @@ export default function Bracket({ data, editable, onChanged }: Props) {
     );
   }
 
-  const cardProps = (m: (typeof data.matches)[number], wide: boolean) => ({
+  const cardProps = (m: Match, wide: boolean) => ({
     key: m.id,
     match: m,
     players,
     format: resolveFormat(data.formats, m.round_number),
     editable,
-    onChanged,
+    onMatchUpdated: patchMatch,
+    onCountsChanged: handleCountsChanged,
     swapMode,
     selectedForSwap: selected,
     onSelectForSwap,

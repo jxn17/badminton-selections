@@ -22,6 +22,7 @@ def match_snapshot(match: Match) -> dict:
         "status": match.status.value if match.status else None,
         "winner_id": match.winner_id,
         "retired_player_id": match.retired_player_id,
+        "no_show_player_id": match.no_show_player_id,
         "player_a_id": match.player_a_id,
         "player_b_id": match.player_b_id,
         "games": [

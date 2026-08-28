@@ -13,6 +13,7 @@ export interface Player {
   is_walkin: boolean;
   flagged: boolean;
   flag_note: string | null;
+  reported: boolean; // checked in at the venue (admin-only signal)
   phone: string | null; // admin-only; null for public
   registration_number: string | null;
 }
@@ -34,6 +35,7 @@ export interface Match {
   is_bye: boolean;
   winner_id: number | null;
   retired_player_id: number | null;
+  no_show_player_id: number | null;
   next_match_id: number | null;
   status: MatchStatus;
   scheduled_time: string | null;
@@ -98,6 +100,7 @@ export interface SearchResult {
   group_label: string | null;
   experience_level: string | null;
   phone: string | null;
+  reported: boolean;
   matches: SearchMatch[];
 }
 
@@ -199,25 +202,44 @@ export const api = {
   unlock: (tid: number) => req<any>(`/api/admin/tournaments/${tid}/unlock`, { method: "POST" }),
 
   updateScore: (matchId: number, games: Game[]) =>
-    req<Match>(`/api/admin/matches/${matchId}/score`, { method: "PUT", body: JSON.stringify({ games }) }),
+    req<Partial<Match>>(`/api/admin/matches/${matchId}/score`, { method: "PUT", body: JSON.stringify({ games }) }),
   retire: (matchId: number, retiredPlayerId: number) =>
-    req<Match>(`/api/admin/matches/${matchId}/retire`, {
+    req<Partial<Match>>(`/api/admin/matches/${matchId}/retire`, {
       method: "POST",
       body: JSON.stringify({ retired_player_id: retiredPlayerId }),
     }),
-  unretire: (matchId: number) => req<Match>(`/api/admin/matches/${matchId}/retire`, { method: "DELETE" }),
-  resetMatch: (matchId: number) => req<Match>(`/api/admin/matches/${matchId}/reset`, { method: "POST" }),
+  unretire: (matchId: number) => req<Partial<Match>>(`/api/admin/matches/${matchId}/retire`, { method: "DELETE" }),
+  resetMatch: (matchId: number) => req<Partial<Match>>(`/api/admin/matches/${matchId}/reset`, { method: "POST" }),
   setSchedule: (matchId: number, scheduled_time: string) =>
-    req<any>(`/api/admin/matches/${matchId}/schedule`, {
+    req<Partial<Match>>(`/api/admin/matches/${matchId}/schedule`, {
       method: "PUT",
       body: JSON.stringify({ scheduled_time }),
     }),
+  noShow: (matchId: number, noShowPlayerId: number) =>
+    req<Partial<Match>>(`/api/admin/matches/${matchId}/no-show`, {
+      method: "POST",
+      body: JSON.stringify({ no_show_player_id: noShowPlayerId }),
+    }),
+  clearNoShow: (matchId: number) =>
+    req<Partial<Match>>(`/api/admin/matches/${matchId}/no-show`, { method: "DELETE" }),
 
   flagPlayer: (playerId: number, flagged: boolean, note?: string) =>
     req<any>(`/api/admin/players/${playerId}/flag`, {
       method: "POST",
       body: JSON.stringify({ flagged, note: note ?? null }),
     }),
+  reportPlayer: (playerId: number, reported: boolean) =>
+    req<{ id: number; reported: boolean }>(`/api/admin/players/${playerId}/report`, {
+      method: "POST",
+      body: JSON.stringify({ reported }),
+    }),
+  scheduleSpecific: (body: {
+    text: string;
+    day_label: string;
+    start: string;
+    courts: string[];
+    minutes_per_match: number;
+  }) => req<any>("/api/admin/schedule-specific", { method: "POST", body: JSON.stringify(body) }),
   swap: (tid: number, x: number, y: number) =>
     req<any>(`/api/admin/tournaments/${tid}/swap`, {
       method: "POST",

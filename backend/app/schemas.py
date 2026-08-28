@@ -21,6 +21,7 @@ class PlayerOut(BaseModel):
     is_walkin: bool = False
     flagged: bool = False
     flag_note: str | None = None
+    reported: bool = False  # checked in at the venue (admin-only signal)
     # Admin-only (null on public responses):
     phone: str | None = None
     registration_number: str | None = None
@@ -43,6 +44,7 @@ class MatchOut(BaseModel):
     is_bye: bool
     winner_id: int | None
     retired_player_id: int | None
+    no_show_player_id: int | None = None
     next_match_id: int | None
     status: MatchStatus
     scheduled_time: str | None = None
@@ -166,3 +168,21 @@ class ScheduleDayIn(BaseModel):
 
 class ClearScheduleIn(BaseModel):
     targets: list[ScheduleTarget]
+
+
+class ReportIn(BaseModel):
+    reported: bool
+
+
+class NoShowIn(BaseModel):
+    no_show_player_id: int
+
+
+class ScheduleSpecificIn(BaseModel):
+    """Paste any text (e.g. a WhatsApp export); phone numbers are auto-detected
+    and each matched player's current match is laid onto the given window."""
+    text: str
+    day_label: str = ""
+    start: str = "09:00"
+    courts: list[str] = ["Court 1"]
+    minutes_per_match: int = 8
