@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { Bracket as BracketData, Match, api } from "../api";
+import { useEffect, useRef, useState } from "react";
+import { BracketFocus, Bracket as BracketData, Match, api } from "../api";
 import { groupByRound, playerMap, resolveFormat, roundName, roundNameShort } from "../bracket";
 import MatchCard from "./MatchCard";
 
@@ -8,9 +8,11 @@ interface Props {
   editable: boolean;
   onChanged: () => void;
   onCountsChanged?: () => void;
+  /** A tie to reveal (set by the player search). */
+  focus?: BracketFocus | null;
 }
 
-export default function Bracket({ data, editable, onChanged, onCountsChanged }: Props) {
+export default function Bracket({ data, editable, onChanged, onCountsChanged, focus }: Props) {
   // Matches live in local state so a single score/RET/no-show/schedule edit can
   // be reflected instantly from that action's own response, instead of waiting
   // on a full bracket refetch (the old flow: PUT score -> GET whole bracket ->
@@ -30,11 +32,38 @@ export default function Bracket({ data, editable, onChanged, onCountsChanged }: 
   const [selected, setSelected] = useState<number | null>(null);
   const [swapMsg, setSwapMsg] = useState<string | null>(null);
   const [mobileRound, setMobileRound] = useState<number>(roundNumbers[0] ?? 1);
+  // The match the search asked us to reveal, once it is actually in `matches`.
+  const [highlighted, setHighlighted] = useState<BracketFocus | null>(null);
+  // Nonce of the last pick we acted on. `matches` changes on every poll and
+  // every score save, and without this the effect below would re-scroll the
+  // user back to a tie they searched for minutes ago, mid-edit.
+  const consumedFocus = useRef<number | null>(null);
 
   useEffect(() => {
     // Keep the phone round-selector valid when the bracket changes.
     if (!roundNumbers.includes(mobileRound)) setMobileRound(roundNumbers[0] ?? 1);
   }, [data.tournament.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /* Reveal a searched-for tie, exactly once per pick.
+   *
+   * This has to watch `matches` as well as the focus: picking a player in
+   * another group swaps the whole bracket out, so the tie only exists to
+   * scroll to once that group's data has landed. But `matches` also changes on
+   * every 15s poll and every score save, so the nonce guard is what stops those
+   * from dragging the user back here later. On phones one round is on screen at
+   * a time, so switch to the tie's round first or there is nothing to reveal. */
+  useEffect(() => {
+    if (!focus || focus.nonce === consumedFocus.current) return;
+    const target = matches.find((m) => m.id === focus.matchId);
+    if (!target) return; // wrong group still on screen; wait for the next load
+    consumedFocus.current = focus.nonce;
+    setMobileRound(target.round_number);
+    setHighlighted(focus);
+    // Let the ring fade once it has done its job, so it doesn't linger as
+    // permanent chrome on a card the admin is now editing.
+    const h = window.setTimeout(() => setHighlighted(null), 5000);
+    return () => window.clearTimeout(h);
+  }, [focus, matches]);
 
   /** Apply a single match's update locally: patch it in place, and if it now
    * has a winner, push that winner into the downstream match's slot right
@@ -105,6 +134,8 @@ export default function Bracket({ data, editable, onChanged, onCountsChanged }: 
   const cardProps = (m: Match, wide: boolean) => ({
     key: m.id,
     match: m,
+    highlight: highlighted?.matchId === m.id,
+    highlightPlayerId: highlighted?.matchId === m.id ? highlighted.playerId : null,
     players,
     format: resolveFormat(data.formats, m.round_number),
     editable,

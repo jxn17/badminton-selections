@@ -5,6 +5,8 @@ import os
 
 import pytest
 
+from sqlalchemy import func, select
+
 from app.csv_import import classify_gender, import_csv, normalize_phone, parse_and_dedup
 from app.models import Category, Player
 
@@ -95,20 +97,20 @@ def test_whitespace_trimmed():
     assert rows[0].phone_normalized == "9855555555"
 
 
-def test_import_idempotent(db):
+async def test_import_idempotent(db):
     with open(SAMPLE, encoding="utf-8") as f:
         content = f.read()
-    r1 = import_csv(db, content)
-    c1 = db.query(Player).count()
-    r2 = import_csv(db, content)
-    c2 = db.query(Player).count()
+    r1 = await import_csv(db, content)
+    c1 = await db.scalar(select(func.count(Player.id)))
+    r2 = await import_csv(db, content)
+    c2 = await db.scalar(select(func.count(Player.id)))
     assert c1 == c2
     assert r1.imported == r2.imported == c1
 
 
-def test_sample_shape(db):
+async def test_sample_shape(db):
     with open(SAMPLE, encoding="utf-8") as f:
-        report = import_csv(db, f.read())
+        report = await import_csv(db, f.read())
     # 35 men + the whitespace man + the missing-phone man = 37; 20 women.
     assert report.per_category_counts["men"] == 37
     assert report.per_category_counts["women"] == 20

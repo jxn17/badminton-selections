@@ -7,7 +7,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from sqlalchemy.orm import Session
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from .models import Game, Match, MatchStatus, RoundFormat, Tournament
 
@@ -24,30 +25,32 @@ class ScoringError(Exception):
 # --------------------------------------------------------------------------
 # Format resolution
 # --------------------------------------------------------------------------
-def resolve_format(db: Session, tournament: Tournament, round_number: int) -> RoundFormat:
+async def resolve_format(
+    db: AsyncSession, tournament: Tournament, round_number: int
+) -> RoundFormat:
     """Per-round override if one exists, else the tournament default (round=NULL).
 
     Falls back to a sane in-memory default (single game to 15, win-by-two) if the
     tournament has no configured formats yet.
     """
     override = (
-        db.query(RoundFormat)
-        .filter(
-            RoundFormat.tournament_id == tournament.id,
-            RoundFormat.round_number == round_number,
+        await db.execute(
+            select(RoundFormat).where(
+                RoundFormat.tournament_id == tournament.id,
+                RoundFormat.round_number == round_number,
+            )
         )
-        .one_or_none()
-    )
+    ).scalar_one_or_none()
     if override is not None:
         return override
     default = (
-        db.query(RoundFormat)
-        .filter(
-            RoundFormat.tournament_id == tournament.id,
-            RoundFormat.round_number.is_(None),
+        await db.execute(
+            select(RoundFormat).where(
+                RoundFormat.tournament_id == tournament.id,
+                RoundFormat.round_number.is_(None),
+            )
         )
-        .one_or_none()
-    )
+    ).scalar_one_or_none()
     if default is not None:
         return default
     return RoundFormat(
@@ -169,10 +172,10 @@ def _slot_is_a(match: Match) -> bool:
     return match.position_in_round % 2 == 0
 
 
-def _advance(db: Session, match: Match) -> None:
+async def _advance(db: AsyncSession, match: Match) -> None:
     if match.next_match_id is None:
         return
-    nxt = db.get(Match, match.next_match_id)
+    nxt = await db.get(Match, match.next_match_id)
     if nxt is None:
         return
     if _slot_is_a(match):
@@ -181,14 +184,14 @@ def _advance(db: Session, match: Match) -> None:
         nxt.player_b_id = match.winner_id
 
 
-def _withdraw(db: Session, match: Match) -> None:
+async def _withdraw(db: AsyncSession, match: Match) -> None:
     """Remove this match's previously-advanced player from the downstream slot.
 
     Caller must have verified the downstream match hasn't started.
     """
     if match.next_match_id is None:
         return
-    nxt = db.get(Match, match.next_match_id)
+    nxt = await db.get(Match, match.next_match_id)
     if nxt is None:
         return
     if _slot_is_a(match):
@@ -197,19 +200,19 @@ def _withdraw(db: Session, match: Match) -> None:
         nxt.player_b_id = None
 
 
-def _guard_downstream_editable(db: Session, match: Match) -> None:
+async def _guard_downstream_editable(db: AsyncSession, match: Match) -> None:
     """Block an edit that would change advancement when the next match has begun."""
     if match.next_match_id is None:
         return
-    nxt = db.get(Match, match.next_match_id)
+    nxt = await db.get(Match, match.next_match_id)
     if _is_started(nxt):
         raise ScoringError(
             "The next-round match has already started. Reset it first before changing this result."
         )
 
 
-def apply_scores(
-    db: Session, match: Match, games: list[GameInput], admin_email: str
+async def apply_scores(
+    db: AsyncSession, match: Match, games: list[GameInput], admin_email: str
 ) -> Match:
     """Enter/edit game scores, recompute the winner, and (re)wire advancement.
 
@@ -222,24 +225,26 @@ def apply_scores(
     if match.player_a_id is None or match.player_b_id is None:
         raise ScoringError("Both players must be present before scores can be entered.")
 
-    fmt = resolve_format(db, match.tournament, match.round_number)
+    fmt = await resolve_format(db, match.tournament, match.round_number)
     new_winner, _ = _match_winner_from_games(match, fmt, games)
     old_winner = match.winner_id
 
     # If the decided winner changes (including won -> undecided), the old winner
     # may already be advanced. Guard the downstream match before mutating.
     if new_winner != old_winner and old_winner is not None:
-        _guard_downstream_editable(db, match)
-        _withdraw(db, match)
+        await _guard_downstream_editable(db, match)
+        await _withdraw(db, match)
 
-    # Replace stored games.
-    for g in list(match.games):
-        db.delete(g)
-    db.flush()
+    # Replace stored games *through the collection* rather than with bare
+    # db.delete/db.add. Sessions no longer expire objects on commit (see
+    # database.py), so mutating the relationship is what keeps `match.games`
+    # truthful in memory — the score snapshot returned to the browser is read
+    # straight off it.
+    match.games.clear()
+    await db.flush()
     for g in games:
-        db.add(
+        match.games.append(
             Game(
-                match_id=match.id,
                 game_number=g.game_number,
                 score_a=g.score_a,
                 score_b=g.score_b,
@@ -251,16 +256,16 @@ def apply_scores(
     match.winner_id = new_winner
     if new_winner is not None:
         match.status = MatchStatus.completed
-        _advance(db, match)
+        await _advance(db, match)
     else:
         match.status = MatchStatus.in_progress if games else MatchStatus.pending
 
-    db.flush()
+    await db.flush()
     return match
 
 
-def set_retirement(
-    db: Session, match: Match, retired_player_id: int, admin_email: str
+async def set_retirement(
+    db: AsyncSession, match: Match, retired_player_id: int, admin_email: str
 ) -> Match:
     """Flag a player as retired; the opponent advances regardless of partial score.
 
@@ -276,19 +281,21 @@ def set_retirement(
         match.player_b_id if retired_player_id == match.player_a_id else match.player_a_id
     )
     if winner != match.winner_id and match.winner_id is not None:
-        _guard_downstream_editable(db, match)
-        _withdraw(db, match)
+        await _guard_downstream_editable(db, match)
+        await _withdraw(db, match)
 
     match.retired_player_id = retired_player_id
     match.no_show_player_id = None
     match.winner_id = winner
     match.status = MatchStatus.completed
-    _advance(db, match)
-    db.flush()
+    await _advance(db, match)
+    await db.flush()
     return match
 
 
-def set_no_show(db: Session, match: Match, no_show_player_id: int, admin_email: str) -> Match:
+async def set_no_show(
+    db: AsyncSession, match: Match, no_show_player_id: int, admin_email: str
+) -> Match:
     """Mark a player as not having shown up: the opponent wins immediately.
 
     Distinct from RET — a no-show means the match never started at all, so any
@@ -306,31 +313,30 @@ def set_no_show(db: Session, match: Match, no_show_player_id: int, admin_email: 
         match.player_b_id if no_show_player_id == match.player_a_id else match.player_a_id
     )
     if winner != match.winner_id and match.winner_id is not None:
-        _guard_downstream_editable(db, match)
-        _withdraw(db, match)
+        await _guard_downstream_editable(db, match)
+        await _withdraw(db, match)
 
-    for g in list(match.games):
-        db.delete(g)
-    db.flush()
+    match.games.clear()
+    await db.flush()
 
     match.retired_player_id = None
     match.no_show_player_id = no_show_player_id
     match.winner_id = winner
     match.status = MatchStatus.completed
-    _advance(db, match)
-    db.flush()
+    await _advance(db, match)
+    await db.flush()
     return match
 
 
-def clear_no_show(db: Session, match: Match, admin_email: str) -> Match:
+async def clear_no_show(db: AsyncSession, match: Match, admin_email: str) -> Match:
     """Undo a no-show: back to pending (no games were kept to recompute from)."""
-    return apply_scores(db, match, [], admin_email)
+    return await apply_scores(db, match, [], admin_email)
 
 
-def clear_retirement(db: Session, match: Match, admin_email: str) -> Match:
+async def clear_retirement(db: AsyncSession, match: Match, admin_email: str) -> Match:
     """Un-retire: recompute the result from the stored game scores."""
     games = [
         GameInput(game_number=g.game_number, score_a=g.score_a, score_b=g.score_b)
         for g in match.games
     ]
-    return apply_scores(db, match, games, admin_email)
+    return await apply_scores(db, match, games, admin_email)

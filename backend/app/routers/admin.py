@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import datetime as dt
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
-from sqlalchemy.orm import Session
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from .. import cache
 from ..audit import match_snapshot, record
 from ..auth import require_admin
 from ..csv_import import import_csv
@@ -49,18 +51,35 @@ from ..schemas import (
     WalkinIn,
 )
 
-router = APIRouter(prefix="/api/admin", tags=["admin"], dependencies=[Depends(require_admin)])
+
+async def bust_public_cache(request: Request):
+    """Router-wide teardown: any write here invalidates the public read cache.
+
+    Registered as a yield-dependency so it runs *after* the handler has
+    committed, and so it covers every mutating route automatically — including
+    ones added later, which a per-handler call would eventually miss.
+    """
+    yield
+    if request.method != "GET":
+        cache.invalidate()
 
 
-def _match(db: Session, match_id: int) -> Match:
-    m = db.get(Match, match_id)
+router = APIRouter(
+    prefix="/api/admin",
+    tags=["admin"],
+    dependencies=[Depends(require_admin), Depends(bust_public_cache)],
+)
+
+
+async def _match(db: AsyncSession, match_id: int) -> Match:
+    m = await db.get(Match, match_id)
     if m is None:
         raise HTTPException(404, "Match not found.")
     return m
 
 
-def _tournament(db: Session, tournament_id: int) -> Tournament:
-    t = db.get(Tournament, tournament_id)
+async def _tournament(db: AsyncSession, tournament_id: int) -> Tournament:
+    t = await db.get(Tournament, tournament_id)
     if t is None:
         raise HTTPException(404, "Tournament not found.")
     return t
@@ -76,7 +95,7 @@ def _scoring_error(exc: ScoringError):
 @router.post("/import")
 async def import_entries(
     file: UploadFile = File(...),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     admin: str = Depends(require_admin),
 ):
     raw = await file.read()
@@ -84,55 +103,63 @@ async def import_entries(
         content = raw.decode("utf-8-sig")
     except UnicodeDecodeError:
         content = raw.decode("latin-1")
-    report = import_csv(db, content)
+    report = await import_csv(db, content)
     record(db, admin, "import_csv", "players", None, after=report.as_dict())
-    db.commit()
+    await db.commit()
     return report.as_dict()
 
 
 @router.post("/men/rebuild")
-def build_men(body: GenerateDrawIn, db: Session = Depends(get_db), admin: str = Depends(require_admin)):
+async def build_men(
+    body: GenerateDrawIn, db: AsyncSession = Depends(get_db), admin: str = Depends(require_admin)
+):
     try:
-        result = rebuild_men(db, seed=body.seed)
+        result = await rebuild_men(db, seed=body.seed)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     record(db, admin, "rebuild_men", "tournament", None, after=result)
-    db.commit()
+    await db.commit()
     return result
 
 
 @router.post("/women/rebuild")
-def build_women(body: GenerateDrawIn, db: Session = Depends(get_db), admin: str = Depends(require_admin)):
+async def build_women(
+    body: GenerateDrawIn, db: AsyncSession = Depends(get_db), admin: str = Depends(require_admin)
+):
     try:
-        result = rebuild_women(db, seed=body.seed)
+        result = await rebuild_women(db, seed=body.seed)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     record(db, admin, "rebuild_women", "tournament", None, after=result)
-    db.commit()
+    await db.commit()
     return result
 
 
 @router.post("/tournaments/{tournament_id}/lock")
-def lock(tournament_id: int, db: Session = Depends(get_db), admin: str = Depends(require_admin)):
-    t = _tournament(db, tournament_id)
-    if not t.matches:
+async def lock(
+    tournament_id: int, db: AsyncSession = Depends(get_db), admin: str = Depends(require_admin)
+):
+    t = await _tournament(db, tournament_id)
+    if not await t.awaitable_attrs.matches:
         raise HTTPException(400, "Generate the draw before locking.")
     if t.status != TournamentStatus.draft:
         raise HTTPException(409, "Already locked.")
     t.status = TournamentStatus.locked
     t.locked_at = dt.datetime.now(dt.timezone.utc)
     record(db, admin, "lock", "tournament", t.id, after={"status": "locked"})
-    db.commit()
+    await db.commit()
     return {"status": t.status.value}
 
 
 @router.post("/tournaments/{tournament_id}/unlock")
-def unlock(tournament_id: int, db: Session = Depends(get_db), admin: str = Depends(require_admin)):
-    t = _tournament(db, tournament_id)
+async def unlock(
+    tournament_id: int, db: AsyncSession = Depends(get_db), admin: str = Depends(require_admin)
+):
+    t = await _tournament(db, tournament_id)
     t.status = TournamentStatus.draft
     t.locked_at = None
     record(db, admin, "unlock", "tournament", t.id, after={"status": "draft"})
-    db.commit()
+    await db.commit()
     return {"status": t.status.value}
 
 
@@ -140,76 +167,96 @@ def unlock(tournament_id: int, db: Session = Depends(get_db), admin: str = Depen
 # Scoring / match edits
 # --------------------------------------------------------------------------
 @router.put("/matches/{match_id}/score")
-def update_score(match_id: int, body: ScoreUpdateIn, db: Session = Depends(get_db), admin: str = Depends(require_admin)):
-    m = _match(db, match_id)
+async def update_score(
+    match_id: int,
+    body: ScoreUpdateIn,
+    db: AsyncSession = Depends(get_db),
+    admin: str = Depends(require_admin),
+):
+    m = await _match(db, match_id)
     before = match_snapshot(m)
     games = [GameInput(g.game_number, g.score_a, g.score_b) for g in body.games]
     try:
-        apply_scores(db, m, games, admin)
+        await apply_scores(db, m, games, admin)
     except ScoringError as exc:
         _scoring_error(exc)
     record(db, admin, "score_edit", "match", m.id, before, match_snapshot(m))
-    db.commit()
+    await db.commit()
     return match_snapshot(m)
 
 
 @router.post("/matches/{match_id}/retire")
-def retire(match_id: int, body: RetireIn, db: Session = Depends(get_db), admin: str = Depends(require_admin)):
-    m = _match(db, match_id)
+async def retire(
+    match_id: int,
+    body: RetireIn,
+    db: AsyncSession = Depends(get_db),
+    admin: str = Depends(require_admin),
+):
+    m = await _match(db, match_id)
     before = match_snapshot(m)
     try:
-        set_retirement(db, m, body.retired_player_id, admin)
+        await set_retirement(db, m, body.retired_player_id, admin)
     except ScoringError as exc:
         _scoring_error(exc)
     record(db, admin, "retire", "match", m.id, before, match_snapshot(m))
-    db.commit()
+    await db.commit()
     return match_snapshot(m)
 
 
 @router.delete("/matches/{match_id}/retire")
-def unretire(match_id: int, db: Session = Depends(get_db), admin: str = Depends(require_admin)):
-    m = _match(db, match_id)
+async def unretire(
+    match_id: int, db: AsyncSession = Depends(get_db), admin: str = Depends(require_admin)
+):
+    m = await _match(db, match_id)
     before = match_snapshot(m)
     try:
-        clear_retirement(db, m, admin)
+        await clear_retirement(db, m, admin)
     except ScoringError as exc:
         _scoring_error(exc)
     record(db, admin, "clear_retire", "match", m.id, before, match_snapshot(m))
-    db.commit()
+    await db.commit()
     return match_snapshot(m)
 
 
 @router.post("/matches/{match_id}/reset")
-def reset_match(match_id: int, db: Session = Depends(get_db), admin: str = Depends(require_admin)):
-    m = _match(db, match_id)
+async def reset_match(
+    match_id: int, db: AsyncSession = Depends(get_db), admin: str = Depends(require_admin)
+):
+    m = await _match(db, match_id)
     before = match_snapshot(m)
     if m.next_match_id is not None:
-        nxt = db.get(Match, m.next_match_id)
-        if nxt is not None and (nxt.status != MatchStatus.pending or nxt.winner_id is not None or nxt.games):
+        nxt = await db.get(Match, m.next_match_id)
+        if nxt is not None and (
+            nxt.status != MatchStatus.pending or nxt.winner_id is not None or nxt.games
+        ):
             raise HTTPException(409, "The next-round match has started. Reset that one first.")
         if nxt is not None:
             if m.position_in_round % 2 == 0:
                 nxt.player_a_id = None
             else:
                 nxt.player_b_id = None
-    for g in list(m.games):
-        db.delete(g)
+    m.games.clear()
     m.winner_id = None
     m.retired_player_id = None
     m.no_show_player_id = None
     m.status = MatchStatus.pending
     record(db, admin, "reset_match", "match", m.id, before, match_snapshot(m))
-    db.commit()
+    await db.commit()
     return match_snapshot(m)
 
 
 @router.put("/matches/{match_id}/schedule")
-def set_schedule(match_id: int, body: ScheduleIn, db: Session = Depends(get_db), admin: str = Depends(require_admin)):
-    m = _match(db, match_id)
+async def set_schedule(
+    match_id: int,
+    body: ScheduleIn,
+    db: AsyncSession = Depends(get_db),
+    admin: str = Depends(require_admin),
+):
+    m = await _match(db, match_id)
     before = {"scheduled_time": m.scheduled_time}
     m.scheduled_time = (body.scheduled_time or "").strip() or None
     record(db, admin, "schedule", "match", m.id, before, {"scheduled_time": m.scheduled_time})
-    db.commit()
+    await db.commit()
     return {"id": m.id, "scheduled_time": m.scheduled_time}
 
 
@@ -217,94 +264,115 @@ def set_schedule(match_id: int, body: ScheduleIn, db: Session = Depends(get_db),
 # Roster: flag/shortlist, swap, walk-ins
 # --------------------------------------------------------------------------
 @router.post("/matches/{match_id}/no-show")
-def no_show(match_id: int, body: NoShowIn, db: Session = Depends(get_db), admin: str = Depends(require_admin)):
-    m = _match(db, match_id)
+async def no_show(
+    match_id: int,
+    body: NoShowIn,
+    db: AsyncSession = Depends(get_db),
+    admin: str = Depends(require_admin),
+):
+    m = await _match(db, match_id)
     before = match_snapshot(m)
     try:
-        set_no_show(db, m, body.no_show_player_id, admin)
+        await set_no_show(db, m, body.no_show_player_id, admin)
     except ScoringError as exc:
         _scoring_error(exc)
     record(db, admin, "no_show", "match", m.id, before, match_snapshot(m))
-    db.commit()
+    await db.commit()
     return match_snapshot(m)
 
 
 @router.delete("/matches/{match_id}/no-show")
-def clear_no_show_ep(match_id: int, db: Session = Depends(get_db), admin: str = Depends(require_admin)):
-    m = _match(db, match_id)
+async def clear_no_show_ep(
+    match_id: int, db: AsyncSession = Depends(get_db), admin: str = Depends(require_admin)
+):
+    m = await _match(db, match_id)
     before = match_snapshot(m)
     try:
-        clear_no_show(db, m, admin)
+        await clear_no_show(db, m, admin)
     except ScoringError as exc:
         _scoring_error(exc)
     record(db, admin, "clear_no_show", "match", m.id, before, match_snapshot(m))
-    db.commit()
+    await db.commit()
     return match_snapshot(m)
 
 
 @router.post("/players/{player_id}/report")
-def report_player(player_id: int, body: ReportIn, db: Session = Depends(get_db), admin: str = Depends(require_admin)):
-    p = db.get(Player, player_id)
+async def report_player(
+    player_id: int,
+    body: ReportIn,
+    db: AsyncSession = Depends(get_db),
+    admin: str = Depends(require_admin),
+):
+    p = await db.get(Player, player_id)
     if p is None:
         raise HTTPException(404, "Player not found.")
     before = {"reported": p.reported}
     p.reported = body.reported
     record(db, admin, "report_player", "player", p.id, before, {"reported": p.reported})
-    db.commit()
+    await db.commit()
     return {"id": p.id, "reported": p.reported}
 
 
 @router.post("/schedule-specific")
-def schedule_specific_ep(
-    body: ScheduleSpecificIn, db: Session = Depends(get_db), admin: str = Depends(require_admin)
+async def schedule_specific_ep(
+    body: ScheduleSpecificIn,
+    db: AsyncSession = Depends(get_db),
+    admin: str = Depends(require_admin),
 ):
     """Paste free text (e.g. a WhatsApp export) — phone numbers are auto-detected
     and each matched player's current match is scheduled onto the given window."""
     try:
-        result = schedule_specific_players(
+        result = await schedule_specific_players(
             db, body.text, body.day_label, body.start, body.courts, body.minutes_per_match
         )
     except ScoringError as exc:
         _scoring_error(exc)
     record(db, admin, "schedule_specific", "match", None, after=result)
-    db.commit()
+    await db.commit()
     return result
 
 
 @router.post("/players/{player_id}/flag")
-def flag_player(player_id: int, body: FlagIn, db: Session = Depends(get_db), admin: str = Depends(require_admin)):
-    p = db.get(Player, player_id)
+async def flag_player(
+    player_id: int,
+    body: FlagIn,
+    db: AsyncSession = Depends(get_db),
+    admin: str = Depends(require_admin),
+):
+    p = await db.get(Player, player_id)
     if p is None:
         raise HTTPException(404, "Player not found.")
     before = {"flagged": p.flagged, "flag_note": p.flag_note}
     p.flagged = body.flagged
     p.flag_note = (body.note or "").strip() or None
     record(db, admin, "flag_player", "player", p.id, before, {"flagged": p.flagged, "flag_note": p.flag_note})
-    db.commit()
+    await db.commit()
     return {"id": p.id, "flagged": p.flagged, "flag_note": p.flag_note}
 
 
 @router.delete("/players/{player_id}")
-def delete_player(player_id: int, db: Session = Depends(get_db), admin: str = Depends(require_admin)):
+async def delete_player(
+    player_id: int, db: AsyncSession = Depends(get_db), admin: str = Depends(require_admin)
+):
     try:
-        result = remove_player(db, player_id)
+        result = await remove_player(db, player_id)
     except ScoringError as exc:
         _scoring_error(exc)
     record(db, admin, "remove_player", "player", player_id, after=result)
-    db.commit()
+    await db.commit()
     return result
 
 
 @router.post("/schedule-day")
-def schedule_day_ep(
+async def schedule_day_ep(
     body: ScheduleDayIn,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     admin: str = Depends(require_admin),
 ):
     """Auto-assign match times/courts for one day's play."""
     targets = [{"category": t.category.value, "group": t.group} for t in body.targets]
     try:
-        result = schedule_day(
+        result = await schedule_day(
             db, targets, body.day_label, body.start, body.end,
             body.courts, body.minutes_per_match,
             body.unavailable_phones, body.only_unscheduled,
@@ -312,64 +380,74 @@ def schedule_day_ep(
     except ScoringError as exc:
         _scoring_error(exc)
     record(db, admin, "schedule_day", "tournament", None, after=result)
-    db.commit()
+    await db.commit()
     return result
 
 
 @router.post("/clear-schedule")
-def clear_schedule_ep(
+async def clear_schedule_ep(
     body: ClearScheduleIn,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     admin: str = Depends(require_admin),
 ):
     targets = [{"category": t.category.value, "group": t.group} for t in body.targets]
-    result = clear_schedule(db, targets)
+    result = await clear_schedule(db, targets)
     record(db, admin, "clear_schedule", "tournament", None, after=result)
-    db.commit()
+    await db.commit()
     return result
 
 
 @router.post("/move-to-group")
-def move_to_group(
+async def move_to_group(
     body: MoveToGroupIn,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     admin: str = Depends(require_admin),
 ):
     """Bulk-move men into given groups (e.g. everyone who can only play Sunday)."""
     try:
-        result = move_players_to_groups(db, body.phones, body.target_groups, Category.men)
+        result = await move_players_to_groups(db, body.phones, body.target_groups, Category.men)
     except ScoringError as exc:
         _scoring_error(exc)
     record(db, admin, "move_to_group", "player", None, after=result)
-    db.commit()
+    await db.commit()
     return result
 
 
 @router.post("/tournaments/{tournament_id}/swap")
-def swap(tournament_id: int, body: SwapIn, db: Session = Depends(get_db), admin: str = Depends(require_admin)):
-    t = _tournament(db, tournament_id)
+async def swap(
+    tournament_id: int,
+    body: SwapIn,
+    db: AsyncSession = Depends(get_db),
+    admin: str = Depends(require_admin),
+):
+    t = await _tournament(db, tournament_id)
     try:
-        swap_players(db, t, body.player_x_id, body.player_y_id)
+        await swap_players(db, t, body.player_x_id, body.player_y_id)
     except ScoringError as exc:
         _scoring_error(exc)
     record(db, admin, "swap_players", "tournament", t.id,
            after={"x": body.player_x_id, "y": body.player_y_id})
-    db.commit()
+    await db.commit()
     return {"ok": True}
 
 
 @router.post("/walkin/{category}")
-def walkin_cat(category: str, body: WalkinIn, db: Session = Depends(get_db), admin: str = Depends(require_admin)):
+async def walkin_cat(
+    category: str,
+    body: WalkinIn,
+    db: AsyncSession = Depends(get_db),
+    admin: str = Depends(require_admin),
+):
     try:
         cat = Category(category)
     except ValueError:
         raise HTTPException(404, "Category must be 'men' or 'women'.") from None
     try:
-        result = add_walkin(db, cat, body.name, body.phone, body.experience, body.group_label)
+        result = await add_walkin(db, cat, body.name, body.phone, body.experience, body.group_label)
     except ScoringError as exc:
         _scoring_error(exc)
     record(db, admin, "add_walkin", "player", result["player_id"], after=result)
-    db.commit()
+    await db.commit()
     return result
 
 
@@ -377,19 +455,29 @@ def walkin_cat(category: str, body: WalkinIn, db: Session = Depends(get_db), adm
 # Scoring formats (per tournament/group)
 # --------------------------------------------------------------------------
 @router.get("/tournaments/{tournament_id}/formats", response_model=list[RoundFormatOut])
-def list_formats(tournament_id: int, db: Session = Depends(get_db)):
-    t = _tournament(db, tournament_id)
+async def list_formats(tournament_id: int, db: AsyncSession = Depends(get_db)):
+    t = await _tournament(db, tournament_id)
     return (
-        db.query(RoundFormat)
-        .filter(RoundFormat.tournament_id == t.id)
-        .order_by(RoundFormat.round_number.nullsfirst())
+        (
+            await db.execute(
+                select(RoundFormat)
+                .where(RoundFormat.tournament_id == t.id)
+                .order_by(RoundFormat.round_number.nullsfirst())
+            )
+        )
+        .scalars()
         .all()
     )
 
 
 @router.put("/tournaments/{tournament_id}/formats", response_model=RoundFormatOut)
-def upsert_format(tournament_id: int, body: RoundFormatIn, db: Session = Depends(get_db), admin: str = Depends(require_admin)):
-    t = _tournament(db, tournament_id)
+async def upsert_format(
+    tournament_id: int,
+    body: RoundFormatIn,
+    db: AsyncSession = Depends(get_db),
+    admin: str = Depends(require_admin),
+):
+    t = await _tournament(db, tournament_id)
     if body.points_to_win < 1:
         raise HTTPException(422, "points_to_win must be >= 1.")
     if body.hard_cap is not None and body.hard_cap < body.points_to_win:
@@ -397,14 +485,14 @@ def upsert_format(tournament_id: int, body: RoundFormatIn, db: Session = Depends
     if body.games_to_win_match < 1:
         raise HTTPException(422, "games_to_win_match must be >= 1.")
     fmt = (
-        db.query(RoundFormat)
-        .filter(
-            RoundFormat.tournament_id == t.id,
-            RoundFormat.round_number.is_(None) if body.round_number is None
-            else RoundFormat.round_number == body.round_number,
+        await db.execute(
+            select(RoundFormat).where(
+                RoundFormat.tournament_id == t.id,
+                RoundFormat.round_number.is_(None) if body.round_number is None
+                else RoundFormat.round_number == body.round_number,
+            )
         )
-        .one_or_none()
-    )
+    ).scalar_one_or_none()
     if fmt is None:
         fmt = RoundFormat(tournament_id=t.id, round_number=body.round_number)
         db.add(fmt)
@@ -412,33 +500,51 @@ def upsert_format(tournament_id: int, body: RoundFormatIn, db: Session = Depends
     fmt.win_by_two = body.win_by_two
     fmt.hard_cap = body.hard_cap
     fmt.games_to_win_match = body.games_to_win_match
-    db.flush()
+    await db.flush()
     record(db, admin, "set_format", "round_format", fmt.id, after={"round": fmt.round_number, "ptw": fmt.points_to_win})
-    db.commit()
+    await db.commit()
     return fmt
 
 
 @router.delete("/tournaments/{tournament_id}/formats/{round_number}")
-def delete_format(tournament_id: int, round_number: int, db: Session = Depends(get_db), admin: str = Depends(require_admin)):
-    t = _tournament(db, tournament_id)
+async def delete_format(
+    tournament_id: int,
+    round_number: int,
+    db: AsyncSession = Depends(get_db),
+    admin: str = Depends(require_admin),
+):
+    t = await _tournament(db, tournament_id)
     fmt = (
-        db.query(RoundFormat)
-        .filter(RoundFormat.tournament_id == t.id, RoundFormat.round_number == round_number)
-        .one_or_none()
-    )
+        await db.execute(
+            select(RoundFormat).where(
+                RoundFormat.tournament_id == t.id,
+                RoundFormat.round_number == round_number,
+            )
+        )
+    ).scalar_one_or_none()
     if fmt is None:
         raise HTTPException(404, "No override for that round.")
-    db.delete(fmt)
+    await db.delete(fmt)
     record(db, admin, "delete_format", "round_format", fmt.id)
-    db.commit()
+    await db.commit()
     return {"ok": True}
 
 
 @router.get("/audit")
-def list_audit(limit: int = 150, db: Session = Depends(get_db)):
+async def list_audit(limit: int = 150, db: AsyncSession = Depends(get_db)):
     from ..models import AuditLog
 
-    rows = db.query(AuditLog).order_by(AuditLog.timestamp.desc(), AuditLog.id.desc()).limit(limit).all()
+    rows = (
+        (
+            await db.execute(
+                select(AuditLog)
+                .order_by(AuditLog.timestamp.desc(), AuditLog.id.desc())
+                .limit(limit)
+            )
+        )
+        .scalars()
+        .all()
+    )
     return [
         {
             "id": r.id, "admin": r.admin_email, "action": r.action, "entity": r.entity,

@@ -30,7 +30,8 @@ from __future__ import annotations
 import random
 from dataclasses import dataclass, field
 
-from sqlalchemy.orm import Session
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from .models import Match, MatchStatus, Player, Tournament
 
@@ -190,19 +191,21 @@ def _place_into(target: MatchPlan, from_position: int, player_id: int) -> None:
 # --------------------------------------------------------------------------
 # DB persistence
 # --------------------------------------------------------------------------
-def generate_draw(db: Session, tournament: Tournament, seed: int | None = None) -> Tournament:
+async def generate_draw(
+    db: AsyncSession, tournament: Tournament, seed: int | None = None
+) -> Tournament:
     """(Re)generate the bracket for a *draft* tournament and persist it.
 
     Wipes any existing matches, builds a fresh plan, writes Match rows, and wires
     next_match_id. Stores bracket_size, num_byes and draw_seed for auditability.
     """
     # Players for THIS tournament: category + its group (women have group_label=None).
-    q = db.query(Player).filter(Player.category == tournament.category)
+    q = select(Player).where(Player.category == tournament.category)
     if tournament.group_label is None:
-        q = q.filter(Player.group_label.is_(None))
+        q = q.where(Player.group_label.is_(None))
     else:
-        q = q.filter(Player.group_label == tournament.group_label)
-    players = q.order_by(Player.id).all()
+        q = q.where(Player.group_label == tournament.group_label)
+    players = (await db.execute(q.order_by(Player.id))).scalars().all()
     player_ids = [p.id for p in players]
     if len(player_ids) < 2:
         label = tournament.group_label or "(all)"
@@ -217,10 +220,12 @@ def generate_draw(db: Session, tournament: Tournament, seed: int | None = None) 
 
     plan = build_draw_plan(player_ids, seed)
 
-    # Clear previous matches (draft only — caller enforces status).
-    for m in list(tournament.matches):
-        db.delete(m)
-    db.flush()
+    # Clear previous matches (draft only — caller enforces status). The
+    # relationship is pulled explicitly: under async nothing lazy-loads on
+    # plain attribute access.
+    existing = await tournament.awaitable_attrs.matches
+    existing.clear()  # delete-orphan cascade removes the rows (and their games)
+    await db.flush()
 
     # Create rows round by round, keeping a position->Match index per round.
     created: list[dict[int, Match]] = []
@@ -239,7 +244,7 @@ def generate_draw(db: Session, tournament: Tournament, seed: int | None = None) 
             )
             db.add(match)
             by_pos[mp.position] = match
-        db.flush()  # assign ids for this round before wiring
+        await db.flush()  # assign ids for this round before wiring
         created.append(by_pos)
 
     # Wire next_match_id using each plan match's next_position.
@@ -252,5 +257,5 @@ def generate_draw(db: Session, tournament: Tournament, seed: int | None = None) 
     tournament.bracket_size = plan.bracket_size
     tournament.num_byes = plan.num_byes
     tournament.draw_seed = seed
-    db.flush()
+    await db.flush()
     return tournament

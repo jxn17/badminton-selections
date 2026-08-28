@@ -12,6 +12,7 @@ from app.draw import (
     seed_slot_order,
 )
 from app.models import Category, Match, Player, Tournament, TournamentStatus
+from sqlalchemy import select
 
 COUNTS = [2, 3, 5, 6, 7, 8, 13, 16, 17, 31, 32]
 
@@ -99,7 +100,7 @@ def test_refuses_fewer_than_two():
         build_draw_plan([1], seed=1)
 
 
-def _make_players(db, n, category=Category.men):
+async def _make_players(db, n, category=Category.men):
     players = []
     for i in range(n):
         p = Player(
@@ -111,25 +112,29 @@ def _make_players(db, n, category=Category.men):
         )
         db.add(p)
         players.append(p)
-    db.flush()
+    await db.flush()
     return players
 
 
 @pytest.mark.parametrize("n", [5, 7, 16, 17])
-def test_generate_draw_persists_and_wires(db, n):
-    _make_players(db, n)
+async def test_generate_draw_persists_and_wires(db, n):
+    await _make_players(db, n)
     t = Tournament(category=Category.men, status=TournamentStatus.draft)
     db.add(t)
-    db.flush()
+    await db.flush()
 
-    generate_draw(db, t, seed=123)
-    db.commit()
+    await generate_draw(db, t, seed=123)
+    await db.commit()
 
     assert t.bracket_size == next_power_of_two(n)
     assert t.num_byes == t.bracket_size - n
     assert t.draw_seed == 123
 
-    matches = db.query(Match).filter(Match.tournament_id == t.id).all()
+    matches = (
+        (await db.execute(select(Match).where(Match.tournament_id == t.id)))
+        .scalars()
+        .all()
+    )
     by_id = {m.id: m for m in matches}
 
     # next_match_id points to a real match, except for the single final.

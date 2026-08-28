@@ -97,6 +97,9 @@ class Tournament(Base):
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     locked_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
 
+    # Loaded on demand via `await t.awaitable_attrs.matches` (or an explicit
+    # selectinload) — eager-loading a whole bracket on every Tournament row
+    # would make the group list far heavier than it needs to be.
     matches: Mapped[list[Match]] = relationship(
         back_populates="tournament", cascade="all, delete-orphan"
     )
@@ -130,12 +133,21 @@ class Match(Base):
     # Free-text schedule set by admins, e.g. "Sat 10:30, Court 2".
     scheduled_time: Mapped[str | None] = mapped_column(String(120))
 
-    tournament: Mapped[Tournament] = relationship(back_populates="matches")
+    # Under async there is no such thing as a lazy load on attribute access —
+    # it would be blocking IO outside an await. These two are read by the
+    # scoring/audit code on any match it touches, so they are eager-loaded
+    # (batched into ONE extra query per result set, not per row).
+    tournament: Mapped[Tournament] = relationship(back_populates="matches", lazy="selectin")
+    # Unused server-side (the app works in player ids and its own name index),
+    # so these stay lazy rather than costing a join on every match query.
     player_a: Mapped[Player | None] = relationship(foreign_keys=[player_a_id])
     player_b: Mapped[Player | None] = relationship(foreign_keys=[player_b_id])
     winner: Mapped[Player | None] = relationship(foreign_keys=[winner_id])
     games: Mapped[list[Game]] = relationship(
-        back_populates="match", cascade="all, delete-orphan", order_by="Game.game_number"
+        back_populates="match",
+        cascade="all, delete-orphan",
+        order_by="Game.game_number",
+        lazy="selectin",
     )
 
 

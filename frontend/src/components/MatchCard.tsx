@@ -18,6 +18,10 @@ interface Props {
   selectedForSwap: number | null;
   onSelectForSwap: (playerId: number) => void;
   wide?: boolean; // full-width on phones
+  // Set when the player search asked for this tie: the card scrolls itself into
+  // view and rings until the highlight is cleared.
+  highlight?: boolean;
+  highlightPlayerId?: number | null;
 }
 
 interface CellPair {
@@ -45,8 +49,11 @@ export default function MatchCard({
   selectedForSwap,
   onSelectForSwap,
   wide = false,
+  highlight = false,
+  highlightPlayerId = null,
 }: Props) {
   const cols = maxGames(format);
+  const cardRef = useRef<HTMLDivElement>(null);
   const [cells, setCells] = useState<CellPair[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [errorGame, setErrorGame] = useState<number | null>(null);
@@ -61,6 +68,33 @@ export default function MatchCard({
   // refetches every 15s; without this guard that refetch would wipe whatever is
   // half-typed.
   const dirtyRef = useRef(false);
+
+  // Bring a searched-for tie onto the screen. Both the phone and the desktop
+  // layouts render every card, but the copy that isn't in play is display:none,
+  // where scrollIntoView is a no-op — so only the visible one actually moves,
+  // and it moves whichever container is scrollable (the page on phones, the
+  // horizontal round strip on desktop).
+  useEffect(() => {
+    if (!highlight) return;
+    const el = cardRef.current;
+    if (!el) return;
+    const reduced = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+    const into = (behavior: ScrollBehavior) =>
+      el.scrollIntoView({ behavior, block: "center", inline: "center" });
+
+    into(reduced ? "auto" : "smooth");
+    if (reduced) return;
+    // A smooth scroll only advances while the page is producing frames — in a
+    // background tab, or anywhere animations are suppressed, it silently never
+    // arrives. Check, and snap if it didn't: landing on the tie matters more
+    // than gliding there.
+    const h = window.setTimeout(() => {
+      const r = el.getBoundingClientRect();
+      const onScreen = r.top >= 0 && r.bottom <= window.innerHeight;
+      if (!onScreen && el.offsetParent !== null) into("auto");
+    }, 700);
+    return () => window.clearTimeout(h);
+  }, [highlight]);
 
   useEffect(() => {
     if (dirtyRef.current) return; // keep the admin's in-progress input
@@ -190,6 +224,7 @@ export default function MatchCard({
 
   const playerRow = (side: "a" | "b", id: number | null) => {
     const p = id !== null ? players.get(id) ?? null : null;
+    const isSearched = highlight && id !== null && id === highlightPlayerId;
     const isWinner = id !== null && id === winnerId;
     const isRetired = id !== null && id === retiredId;
     const isNoShow = id !== null && id === noShowId;
@@ -212,7 +247,9 @@ export default function MatchCard({
               className={`min-w-0 truncate text-left ${swapMode && p ? "hover:underline cursor-pointer" : "cursor-default"}`}
               title={swapMode ? "Click to select for swap" : undefined}
             >
-              {isByeSlot ? <span className="text-slate-400 italic">Bye</span> : p ? p.full_name : "TBD"}
+              <span className={isSearched ? "bg-amber-200/70 rounded px-1 -mx-1" : undefined}>
+                {isByeSlot ? <span className="text-slate-400 italic">Bye</span> : p ? p.full_name : "TBD"}
+              </span>
             </button>
             {p?.is_walkin && (
               <span className="text-[9px] uppercase bg-purple-100 text-purple-700 px-1 rounded">spot</span>
@@ -309,7 +346,12 @@ export default function MatchCard({
   };
 
   return (
-    <div className={`bg-white rounded-lg border border-slate-200 shadow-sm ${wide ? "w-full" : "w-72"}`}>
+    <div
+      ref={cardRef}
+      className={`bg-white rounded-lg border shadow-sm transition-shadow scroll-mt-40 ${
+        wide ? "w-full" : "w-72"
+      } ${highlight ? "border-court ring-2 ring-court/60 shadow-md" : "border-slate-200"}`}
+    >
       {playerRow("a", match.player_a_id)}
       <div className="border-t border-slate-100" />
       {playerRow("b", match.player_b_id)}

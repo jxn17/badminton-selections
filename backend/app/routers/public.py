@@ -1,13 +1,21 @@
-"""Public, read-only endpoints. No auth. Phone/registration only when admin."""
+"""Public, read-only endpoints. No auth. Phone/registration only when admin.
+
+The two endpoints everyone hits — the group list and a bracket — are served
+from a short-lived in-memory cache for anonymous visitors, so a crowd all
+refreshing the same draw costs one set of queries rather than one per person.
+See app/cache.py for the invalidation rules.
+"""
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from sqlalchemy import func
-from sqlalchemy.orm import Session, joinedload, selectinload
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
+from .. import cache
 from ..auth import current_admin_name
 from ..database import get_db
-from ..models import Category, Match, Player, RoundFormat, Tournament
+from ..models import Category, Match, Player, Tournament
 from ..schemas import (
     BracketOut,
     GroupSummary,
@@ -48,7 +56,7 @@ def _parse_category(value: str) -> Category:
 
 
 @router.get("/health")
-def health():
+async def health():
     return {"status": "ok"}
 
 
@@ -67,36 +75,58 @@ def _round_name(round_number: int, bracket_size: int | None) -> str:
 
 
 @router.get("/search")
-def search_players(request: Request, q: str = "", db: Session = Depends(get_db)):
-    """Find players by name; return their group, opponent(s), and match time(s)."""
+async def search_players(request: Request, q: str = "", db: AsyncSession = Depends(get_db)):
+    """Find players by name; return their group, opponent(s), and match time(s).
+
+    Each result carries `match_id` and the group it lives in, which is what lets
+    the UI jump straight to that tie in the bracket rather than only describing
+    where it is.
+    """
     include_pii = current_admin_name(request) is not None
     q = (q or "").strip()
     if len(q) < 2:
         return []
 
     players = (
-        db.query(Player)
-        .filter(Player.full_name.ilike(f"%{q}%"))
-        .order_by(Player.full_name)
-        .limit(40)
+        (
+            await db.execute(
+                select(Player)
+                .where(Player.full_name.ilike(f"%{q}%"))
+                .order_by(Player.full_name)
+                .limit(40)
+            )
+        )
+        .scalars()
         .all()
     )
 
     # Index tournaments by (category, group_label) and cache names for opponents.
-    tournaments = {(t.category, t.group_label): t for t in db.query(Tournament).all()}
-    name_of = {p.id: p.full_name for p in db.query(Player).all()}
+    tournaments = {
+        (t.category, t.group_label): t
+        for t in (await db.execute(select(Tournament))).scalars()
+    }
+    name_of = {
+        pid: full_name
+        for pid, full_name in await db.execute(select(Player.id, Player.full_name))
+    }
 
     # One Match query for every found player, instead of one query per player
     # (was an N+1 that scaled with the number of search results).
     tournament_ids = {t.id for t in tournaments.values()}
     player_ids = {p.id for p in players}
     all_matches = (
-        db.query(Match)
-        .filter(
-            Match.tournament_id.in_(tournament_ids),
-            (Match.player_a_id.in_(player_ids)) | (Match.player_b_id.in_(player_ids)),
+        (
+            await db.execute(
+                select(Match)
+                .where(
+                    Match.tournament_id.in_(tournament_ids),
+                    (Match.player_a_id.in_(player_ids))
+                    | (Match.player_b_id.in_(player_ids)),
+                )
+                .order_by(Match.round_number)
+            )
         )
-        .order_by(Match.round_number)
+        .scalars()
         .all()
         if tournament_ids and player_ids
         else []
@@ -152,35 +182,58 @@ def search_players(request: Request, q: str = "", db: Session = Depends(get_db))
 
 
 @router.get("/flagged", response_model=list[PlayerOut])
-def flagged_players(request: Request, db: Session = Depends(get_db)):
-    """All ⭐ shortlisted players. Admin-only — the shortlist is not public."""
+async def flagged_players(request: Request, db: AsyncSession = Depends(get_db)):
+    """All shortlisted players. Admin-only — the shortlist is not public."""
     if current_admin_name(request) is None:
         raise HTTPException(401, "Admin login required.")
     include_pii = True
     ps = (
-        db.query(Player)
-        .filter(Player.flagged.is_(True))
-        .order_by(Player.category, Player.group_label.nullsfirst(), Player.full_name)
+        (
+            await db.execute(
+                select(Player)
+                .where(Player.flagged.is_(True))
+                .order_by(
+                    Player.category, Player.group_label.nullsfirst(), Player.full_name
+                )
+            )
+        )
+        .scalars()
         .all()
     )
     return [player_out(p, include_pii) for p in ps]
 
 
 @router.get("/groups", response_model=list[GroupSummary])
-def list_groups(db: Session = Depends(get_db)):
+async def list_groups(db: AsyncSession = Depends(get_db)):
     """All tournaments (women + men A–D) for the navbar.
 
     Two queries total (not one .count() per tournament) — this is on the hot
     path (it reloads after every admin action), so N+1 here is felt directly.
+    The result is identical for every viewer, so it is memoised for a few
+    seconds too; any admin write clears it (see app/cache.py).
     """
-    tournaments = db.query(Tournament).order_by(Tournament.category, Tournament.group_label).all()
+    cached = cache.get(("groups",))
+    if cached is not None:
+        return cached
+
+    tournaments = (
+        (
+            await db.execute(
+                select(Tournament).order_by(Tournament.category, Tournament.group_label)
+            )
+        )
+        .scalars()
+        .all()
+    )
     counts_by_key = {
         (cat, grp): cnt
-        for cat, grp, cnt in db.query(
-            Player.category, Player.group_label, func.count(Player.id)
-        ).group_by(Player.category, Player.group_label)
+        for cat, grp, cnt in await db.execute(
+            select(Player.category, Player.group_label, func.count(Player.id)).group_by(
+                Player.category, Player.group_label
+            )
+        )
     }
-    return [
+    out = [
         GroupSummary(
             group_label=t.group_label,
             category=t.category,
@@ -191,39 +244,51 @@ def list_groups(db: Session = Depends(get_db)):
         )
         for t in tournaments
     ]
+    cache.put(("groups",), out)
+    return out
 
 
 @router.get("/bracket", response_model=BracketOut)
-def get_bracket(
+async def get_bracket(
     request: Request,
     category: str,
     group: str | None = None,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     cat = _parse_category(category)
     include_pii = current_admin_name(request) is not None
 
+    # Public visitors all get byte-identical data, so hand them the already-built
+    # BracketOut straight from memory and skip the database entirely. Admins read
+    # through: their copy carries PII and must never be shared out of a cache,
+    # and they are the ones actively changing the data.
+    key = ("bracket", cat.value, group or None)
+    if not include_pii:
+        cached = cache.get(key)
+        if cached is not None:
+            return cached
+
     # Pull the tournament and its scoring formats together — one round-trip
     # instead of two, which matters when the DB is a network hop away.
-    q = db.query(Tournament).options(joinedload(Tournament.formats))
-    q = q.filter(Tournament.category == cat)
+    q = select(Tournament).options(selectinload(Tournament.formats))
+    q = q.where(Tournament.category == cat)
     if cat == Category.men:
         if not group:
             raise HTTPException(400, "Men's bracket requires a group (A–D).")
-        q = q.filter(Tournament.group_label == group)
+        q = q.where(Tournament.group_label == group)
     else:
-        q = q.filter(Tournament.group_label.is_(None))
-    tournament = q.one_or_none()
+        q = q.where(Tournament.group_label.is_(None))
+    tournament = (await db.execute(q)).scalar_one_or_none()
 
-    pq = db.query(Player).filter(Player.category == cat)
+    pq = select(Player).where(Player.category == cat)
     if cat == Category.men and group:
-        pq = pq.filter(Player.group_label == group)
+        pq = pq.where(Player.group_label == group)
     elif cat == Category.women:
-        pq = pq.filter(Player.group_label.is_(None))
-    players = pq.order_by(Player.full_name).all()
+        pq = pq.where(Player.group_label.is_(None))
+    players = (await db.execute(pq.order_by(Player.full_name))).scalars().all()
 
     if tournament is None:
-        return BracketOut(
+        empty = BracketOut(
             tournament=TournamentOut(
                 id=0, category=cat, group_label=group, status="draft",
                 draw_seed=None, bracket_size=None, num_byes=None,
@@ -232,15 +297,22 @@ def get_bracket(
             matches=[],
             formats=[],
         )
+        if not include_pii:
+            cache.put(key, empty)
+        return empty
 
-    # selectinload pulls every match's games in ONE extra query. Without it
-    # SQLAlchemy lazy-loads games per match (~63 extra round-trips per bracket),
-    # which is barely noticeable locally but seconds of latency against a remote DB.
+    # Match.games is eager-loaded with selectin (see models.Match), so every
+    # game in the bracket arrives in ONE extra query instead of the ~63
+    # per-match round-trips a lazy load would cost.
     matches = (
-        db.query(Match)
-        .options(selectinload(Match.games))
-        .filter(Match.tournament_id == tournament.id)
-        .order_by(Match.round_number, Match.position_in_round)
+        (
+            await db.execute(
+                select(Match)
+                .where(Match.tournament_id == tournament.id)
+                .order_by(Match.round_number, Match.position_in_round)
+            )
+        )
+        .scalars()
         .all()
     )
     # Already loaded above; sort in Python (default first) rather than re-query.
@@ -248,9 +320,18 @@ def get_bracket(
         tournament.formats,
         key=lambda f: (f.round_number is not None, f.round_number or 0),
     )
-    return BracketOut(
+    out = BracketOut(
         tournament=TournamentOut.model_validate(tournament),
         players=[player_out(p, include_pii) for p in players],
         matches=[MatchOut.model_validate(m) for m in matches],
         formats=[RoundFormatOut.model_validate(f) for f in formats],
     )
+    if not include_pii:
+        cache.put(key, out)
+    return out
+
+
+@router.get("/cache-stats")
+async def cache_stats():
+    """Tiny operational window into the public read cache."""
+    return cache.stats()

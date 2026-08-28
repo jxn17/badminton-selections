@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Bracket as BracketData, Category, GroupSummary, api } from "./api";
+import { BracketFocus, Bracket as BracketData, Category, GroupSummary, api } from "./api";
 import { useAuth } from "./useAuth";
 import Bracket from "./components/Bracket";
 import AdminToolbar from "./components/AdminToolbar";
@@ -22,6 +22,10 @@ export default function App() {
   const [showLogin, setShowLogin] = useState(false);
   const [view, setView] = useState<"bracket" | "flagged">("bracket");
   const [flaggedCount, setFlaggedCount] = useState(0);
+  // Set when a search result asks to be shown in the draw; consumed by <Bracket>
+  // once the right group's data has loaded.
+  const [focus, setFocus] = useState<BracketFocus | null>(null);
+  const focusNonce = useRef(0);
   const timer = useRef<number | null>(null);
   const selRef = useRef<Selection | null>(null);
 
@@ -95,6 +99,18 @@ export default function App() {
     setSel(selectionFor(g));
   }, []);
 
+  /** A search hit asked to be shown in the draw: switch to its group and hand
+   * <Bracket> the tie to scroll to. The nonce makes picking the same match
+   * twice re-trigger the scroll instead of being a no-op. */
+  const showInBracket = useCallback(
+    (category: Category, group: string | null, matchId?: number, playerId?: number) => {
+      const g = groups.find((x) => x.category === category && x.group_label === group);
+      if (g) pickGroup(g);
+      setFocus(matchId ? { matchId, playerId: playerId ?? 0, nonce: ++focusNonce.current } : null);
+    },
+    [groups, pickGroup],
+  );
+
   // The shortlist is admin-only; drop back to the bracket if an admin signs out.
   useEffect(() => {
     if (!auth.isAdmin && view === "flagged") setView("bracket");
@@ -150,14 +166,7 @@ export default function App() {
         <div className="sticky top-[57px] z-10 bg-slate-50 pt-1 pb-3 -mx-4 px-4 border-b border-slate-200">
         {/* Player search */}
         <div className="mb-4">
-          <SearchBar
-            isAdmin={auth.isAdmin}
-            onChanged={refresh}
-            onPick={(category, group) => {
-              const g = groups.find((x) => x.category === category && x.group_label === group);
-              if (g) pickGroup(g);
-            }}
-          />
+          <SearchBar isAdmin={auth.isAdmin} onChanged={refresh} onPick={showInBracket} />
         </div>
 
         {/* Group navbar */}
@@ -239,7 +248,13 @@ export default function App() {
                 <div className="text-sm text-slate-500 mb-2">
                   {sel?.category === "men" ? `Men's — Group ${sel?.group}` : "Women's"} · {data.players.length} players
                 </div>
-                <Bracket data={data} editable={auth.isAdmin} onChanged={refresh} onCountsChanged={loadGroups} />
+                <Bracket
+                  data={data}
+                  editable={auth.isAdmin}
+                  onChanged={refresh}
+                  onCountsChanged={loadGroups}
+                  focus={focus}
+                />
               </div>
             ) : (
               loading && <div className="py-16 text-center text-slate-400">Loading…</div>

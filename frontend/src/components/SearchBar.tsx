@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from "react";
-import { Category, SearchResult, api } from "../api";
+import { Category, SearchMatch, SearchResult, api, currentMatch } from "../api";
 
 interface Props {
   isAdmin: boolean;
-  onPick: (category: Category, group: string | null) => void;
+  /** Show a player's tie in the bracket. `matchId` scrolls to and highlights that
+   * exact match; without one we just switch to their group. */
+  onPick: (category: Category, group: string | null, matchId?: number, playerId?: number) => void;
   onChanged: () => void;
 }
 
@@ -41,6 +43,13 @@ export default function SearchBar({ isAdmin, onPick, onChanged }: Props) {
     return () => document.removeEventListener("mousedown", onDoc);
   }, []);
 
+  /** Jump to a specific tie (or, with no match, just to the player's group) and
+   * dismiss the dropdown so the bracket underneath is actually visible. */
+  function goTo(r: SearchResult, m: SearchMatch | null) {
+    onPick(r.category, r.group_label, m?.match_id, r.id);
+    setOpen(false);
+  }
+
   async function remove(r: SearchResult) {
     if (!confirm(`Remove ${r.full_name}? Their opponent gets a walkover. This can't be undone.`)) return;
     try {
@@ -70,6 +79,13 @@ export default function SearchBar({ isAdmin, onPick, onChanged }: Props) {
         value={q}
         onChange={(e) => setQ(e.target.value)}
         onFocus={() => results.length && setOpen(true)}
+        onKeyDown={(e) => {
+          // Enter on a single unambiguous hit goes straight to their tie.
+          if (e.key === "Enter" && results.length === 1) {
+            goTo(results[0], currentMatch(results[0]));
+          }
+          if (e.key === "Escape") setOpen(false);
+        }}
         placeholder="🔍 Search a player by name…"
         className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
       />
@@ -83,10 +99,8 @@ export default function SearchBar({ isAdmin, onPick, onChanged }: Props) {
             <div key={r.id} className="px-3 py-2 border-b border-slate-100 last:border-0">
               <div className="flex items-center justify-between gap-2">
                 <button
-                  onClick={() => {
-                    onPick(r.category, r.group_label);
-                    setOpen(false);
-                  }}
+                  onClick={() => goTo(r, currentMatch(r))}
+                  title={`Show ${r.full_name} in the bracket`}
                   className="text-left font-medium text-slate-800 hover:text-court truncate"
                 >
                   {r.full_name}
@@ -123,11 +137,16 @@ export default function SearchBar({ isAdmin, onPick, onChanged }: Props) {
                   )}
                 </div>
               </div>
-              {/* Match info */}
+              {/* Match info — each row jumps to that tie in the bracket. */}
               <div className="mt-1 space-y-0.5">
                 {r.matches.length === 0 && <div className="text-xs text-slate-400">No draw yet.</div>}
                 {r.matches.map((m) => (
-                  <div key={m.match_id} className="text-xs text-slate-500 flex items-center gap-1.5 flex-wrap">
+                  <button
+                    key={m.match_id}
+                    onClick={() => goTo(r, m)}
+                    title="Open this match in the bracket"
+                    className="w-full text-left text-xs text-slate-500 flex items-center gap-1.5 flex-wrap rounded px-1 -mx-1 py-0.5 hover:bg-court/5 hover:text-slate-700 group"
+                  >
                     <span className="text-slate-400">{m.round_name}:</span>
                     {m.is_bye ? (
                       <span className="italic">Bye</span>
@@ -138,7 +157,10 @@ export default function SearchBar({ isAdmin, onPick, onChanged }: Props) {
                     {m.result && (
                       <span className={m.result === "won" ? "text-emerald-600" : "text-slate-400"}>({m.result})</span>
                     )}
-                  </div>
+                    <span className="ml-auto shrink-0 text-court opacity-0 group-hover:opacity-100 transition-opacity">
+                      Show in draw →
+                    </span>
+                  </button>
                 ))}
               </div>
             </div>

@@ -7,8 +7,8 @@ admins sign in with a **shared access code** to import, build draws, enter score
 schedule matches, flag shortlist players, swap players, and add walk-ins.
 
 - **Frontend:** React 18 + TypeScript + Tailwind + Vite
-- **Backend:** FastAPI + SQLAlchemy 2 + Pydantic v2
-- **Database:** PostgreSQL
+- **Backend:** FastAPI + SQLAlchemy 2 (fully async) + Pydantic v2
+- **Database:** PostgreSQL over **asyncpg** (SQLite/aiosqlite for tests)
 - **Deploy:** single-origin (FastAPI serves the built SPA) — one Railway service + Postgres
 
 ```
@@ -33,10 +33,46 @@ docker-compose.yml  local all-in-one (app + Postgres)
   (⭐ a player so they're kept even if they lose a good match), **swap players**
   (rebalance who-plays-whom before matches start), and **walk-ins** (add a spot
   entry; auto-slotted into an open bye).
+- **Find a player, land on their tie:** search a name and click either the name or
+  one of their listed matches — the app switches to that group, scrolls the tie into
+  view, rings the card and highlights the player inside it. On phones it also flips
+  to the round the tie is in.
 - **Phone numbers** show to signed-in admins only — never on the public page.
 - **Multi-admin:** the shared code lets several organizers edit at once; the bracket
   auto-refreshes every 15s so they see each other's updates. Each admin enters a
   name that's recorded in the audit log with every change.
+
+---
+
+## Performance notes
+
+**Everything is async, end to end.** Routes, the service/scoring/draw layer and the
+SQLAlchemy session all run on `AsyncSession` over an asyncio driver, so a slow
+query stalls only its own request instead of blocking the event loop for every
+concurrent visitor. Two consequences worth knowing when editing the code:
+
+- Relationships never lazy-load on plain attribute access. `Match.games` and
+  `Match.tournament` are eager-loaded (`lazy="selectin"`, one batched query per
+  result set); anything else is fetched with an explicit `selectinload(...)` or
+  `await obj.awaitable_attrs.<name>`.
+- Sessions use `expire_on_commit=False`, so an object returned after `commit()` is
+  still readable. In exchange, code that replaces a collection must go through the
+  relationship (`match.games.clear()`), not bare `db.delete(...)`, or the in-memory
+  copy goes stale.
+
+**The public pages are cached in memory.** Every anonymous visitor to a draw gets
+byte-identical data, so `/api/groups` and `/api/bracket` are served from a
+process-local TTL cache (`PUBLIC_CACHE_TTL`, default 45s) holding the already-built
+Pydantic response — a hit never touches the database. It stays honest during a live
+event because:
+
+- **any admin write clears the cache**, so the TTL only ever delays *unchanged*
+  data; a score entered now is public on the very next request; and
+- **admins are never served from it** — their responses carry phone numbers and the
+  shortlist flag, so only the PII-free copy is cached and only a request without an
+  admin session can read it.
+
+`GET /api/cache-stats` reports live entry count, TTL and version.
 
 ---
 
@@ -55,7 +91,7 @@ Backend (needs a Postgres, or use SQLite for a quick spin):
 cd backend
 python -m venv .venv && .venv/Scripts/activate     # macOS/Linux: source .venv/bin/activate
 pip install -r requirements.txt
-DATABASE_URL=sqlite:///./trials.db ADMIN_ACCESS_CODE=trials2026 SECRET_KEY=dev \
+DATABASE_URL=sqlite+aiosqlite:///./trials.db ADMIN_ACCESS_CODE=trials2026 SECRET_KEY=dev \
   uvicorn app.main:app --reload --port 8000
 python seed.py     # optional: load the fake sample + build draws
 ```
@@ -77,7 +113,7 @@ npm run dev        # http://localhost:5173  (proxies /api -> :8000)
 4. On the app service, set **Variables**:
    | Variable | Value |
    | --- | --- |
-   | `DATABASE_URL` | `${{Postgres.DATABASE_URL}}` (reference the Postgres service) |
+   | `DATABASE_URL` | `${{Postgres.DATABASE_URL}}` (reference the Postgres service — the provider's `postgres://…` spelling is normalized to asyncpg automatically, `?sslmode=` included) |
    | `ADMIN_ACCESS_CODE` | a strong shared code you give organizers |
    | `SECRET_KEY` | a long random string |
    | `FRONTEND_URL` | the app's own public https URL (Railway gives you one) |
@@ -105,9 +141,13 @@ numbers) is git-ignored and never committed.
 
 ```bash
 cd backend
-.venv/Scripts/python.exe -m pytest      # 65 tests; SQLite, no Postgres needed
+.venv/Scripts/python.exe -m pytest      # 154 tests; SQLite, no Postgres needed
 ```
 Covers phone normalization, dedup/validation/idempotency, the draw engine for
 `N ∈ {2,3,5,6,7,8,13,16,17,31,32}` (correct bracket size/byes, no bye-vs-bye,
-every player placed once, valid advancement), and format-driven scoring, RET,
-and safe re-advancement.
+every player placed once, valid advancement), format-driven scoring, RET, no-show
+and safe re-advancement, the roster/scheduling service functions (walk-ins,
+withdrawals, swaps, group moves, day and paste-to-schedule), `DATABASE_URL`
+normalization, and an end-to-end HTTP pass over the real ASGI app that pins down
+the async request path and the cache's behaviour (what it serves, to whom, and
+what clears it).

@@ -10,7 +10,7 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 
 @router.post("/code-login")
-def code_login(body: CodeLoginIn, request: Request):
+async def code_login(body: CodeLoginIn, request: Request):
     if not code_is_valid(body.code):
         raise HTTPException(401, "Incorrect access code.")
     request.session[SESSION_ADMIN_KEY] = True
@@ -19,12 +19,12 @@ def code_login(body: CodeLoginIn, request: Request):
 
 
 @router.post("/logout")
-def logout(request: Request):
+async def logout(request: Request):
     request.session.clear()
     return {"ok": True}
 
 
 @router.get("/me")
-def me(request: Request):
+async def me(request: Request):
     name = current_admin_name(request)
     return {"is_admin": name is not None, "name": name}

@@ -8,7 +8,8 @@ but the *balance* is guaranteed.
 """
 from __future__ import annotations
 
-from sqlalchemy.orm import Session
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from .draw import fisher_yates
 from .models import Category, Player
@@ -51,13 +52,21 @@ def plan_groups(players: list[Player], seed: int, num_groups: int = 4) -> dict[i
     return assignment
 
 
-def assign_men_groups(db: Session, seed: int) -> dict[str, int]:
+async def assign_men_groups(db: AsyncSession, seed: int) -> dict[str, int]:
     """Assign every men's player a group_label. Returns per-group counts."""
-    men = db.query(Player).filter(Player.category == Category.men).order_by(Player.id).all()
-    mapping = plan_groups(men, seed)
+    men = (
+        (
+            await db.execute(
+                select(Player).where(Player.category == Category.men).order_by(Player.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    mapping = plan_groups(list(men), seed)
     counts: dict[str, int] = {g: 0 for g in GROUP_LABELS}
     for p in men:
         p.group_label = mapping[p.id]
         counts[p.group_label] += 1
-    db.flush()
+    await db.flush()
     return counts

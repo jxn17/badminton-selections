@@ -104,6 +104,24 @@ export interface SearchResult {
   matches: SearchMatch[];
 }
 
+/** Where the bracket should jump to after a search hit: the group that holds
+ * the tie, the tie itself, and the player who was searched for (so their name
+ * can be picked out inside the card). */
+export interface BracketFocus {
+  matchId: number;
+  playerId: number;
+  /** Bumped on every pick so re-selecting the same tie re-triggers the jump. */
+  nonce: number;
+}
+
+/** The match a player is "on" right now: their earliest undecided tie, falling
+ * back to the last one they played if their run is over. */
+export function currentMatch(r: SearchResult): SearchMatch | null {
+  if (r.matches.length === 0) return null;
+  const byRound = [...r.matches].sort((a, b) => a.round_number - b.round_number);
+  return byRound.find((m) => m.result === null && !m.is_bye) ?? byRound[byRound.length - 1];
+}
+
 export class ApiError extends Error {
   status: number;
   detail: unknown;

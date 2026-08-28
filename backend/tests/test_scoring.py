@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import pytest
 
+from sqlalchemy import select
+
 from app.draw import generate_draw
 from app.models import (
     Category,
@@ -94,7 +96,7 @@ def test_golden_point_does_not_affect_normal_leads():
     assert evaluate_game(golden, 15, 13).status == "a"
 
 
-def _setup(db, n=8, seed=1):
+async def _setup(db, n=8, seed=1):
     for i in range(n):
         db.add(
             Player(
@@ -105,213 +107,218 @@ def _setup(db, n=8, seed=1):
         )
     t = Tournament(category=Category.men, status=TournamentStatus.draft)
     db.add(t)
-    db.flush()
+    await db.flush()
     db.add(RoundFormat(tournament_id=t.id, round_number=None, points_to_win=15,
                        win_by_two=True, hard_cap=None, games_to_win_match=1))
-    db.flush()
-    generate_draw(db, t, seed=seed)
-    db.commit()
+    await db.flush()
+    await generate_draw(db, t, seed=seed)
+    await db.commit()
     return t
 
 
-def _round(db, t, r):
+async def _round(db, t, r):
     return (
-        db.query(Match)
-        .filter(Match.tournament_id == t.id, Match.round_number == r)
-        .order_by(Match.position_in_round)
+        (
+            await db.execute(
+                select(Match)
+                .where(Match.tournament_id == t.id, Match.round_number == r)
+                .order_by(Match.position_in_round)
+            )
+        )
+        .scalars()
         .all()
     )
 
 
-def test_resolve_format_prefers_override(db):
-    t = _setup(db)
+async def test_resolve_format_prefers_override(db):
+    t = await _setup(db)
     db.add(RoundFormat(tournament_id=t.id, round_number=1, points_to_win=11,
                        win_by_two=False, hard_cap=None, games_to_win_match=1))
-    db.commit()
-    assert resolve_format(db, t, 1).points_to_win == 11   # override
-    assert resolve_format(db, t, 2).points_to_win == 15   # default
+    await db.commit()
+    assert (await resolve_format(db, t, 1)).points_to_win == 11   # override
+    assert (await resolve_format(db, t, 2)).points_to_win == 15   # default
 
 
-def test_score_advances_winner(db):
-    t = _setup(db, n=8, seed=3)  # 8 players, no byes -> clean Round 1
-    r1 = _round(db, t, 1)
+async def test_score_advances_winner(db):
+    t = await _setup(db, n=8, seed=3)  # 8 players, no byes -> clean Round 1
+    r1 = await _round(db, t, 1)
     m = next(m for m in r1 if not m.is_bye)
     winner_id = m.player_a_id
 
-    apply_scores(db, m, [GameInput(1, 15, 9)], "admin@test.dev")
-    db.commit()
+    await apply_scores(db, m, [GameInput(1, 15, 9)], "admin@test.dev")
+    await db.commit()
 
     assert m.status == MatchStatus.completed
     assert m.winner_id == winner_id
-    nxt = db.get(Match, m.next_match_id)
+    nxt = await db.get(Match, m.next_match_id)
     advanced = nxt.player_a_id if m.position_in_round % 2 == 0 else nxt.player_b_id
     assert advanced == winner_id
 
 
-def test_invalid_score_raises(db):
-    t = _setup(db, n=8, seed=3)
-    m = next(m for m in _round(db, t, 1) if not m.is_bye)
+async def test_invalid_score_raises(db):
+    t = await _setup(db, n=8, seed=3)
+    m = next(m for m in await _round(db, t, 1) if not m.is_bye)
     with pytest.raises(ScoringError):
-        apply_scores(db, m, [GameInput(1, 20, 15)], "admin@test.dev")  # >2 in deuce
+        await apply_scores(db, m, [GameInput(1, 20, 15)], "admin@test.dev")  # >2 in deuce
 
 
-def test_retirement_advances_opponent(db):
-    t = _setup(db, n=8, seed=3)
-    m = next(m for m in _round(db, t, 1) if not m.is_bye)
+async def test_retirement_advances_opponent(db):
+    t = await _setup(db, n=8, seed=3)
+    m = next(m for m in await _round(db, t, 1) if not m.is_bye)
     retiree = m.player_a_id
     opponent = m.player_b_id
 
     # A partial score is entered, then A retires.
-    apply_scores(db, m, [GameInput(1, 5, 8)], "admin@test.dev")
-    set_retirement(db, m, retiree, "admin@test.dev")
-    db.commit()
+    await apply_scores(db, m, [GameInput(1, 5, 8)], "admin@test.dev")
+    await set_retirement(db, m, retiree, "admin@test.dev")
+    await db.commit()
 
     assert m.winner_id == opponent
     assert m.retired_player_id == retiree
     assert m.status == MatchStatus.completed
     assert len(m.games) == 1  # partial score preserved
-    nxt = db.get(Match, m.next_match_id)
+    nxt = await db.get(Match, m.next_match_id)
     advanced = nxt.player_a_id if m.position_in_round % 2 == 0 else nxt.player_b_id
     assert advanced == opponent
 
 
-def test_reedit_readvances_when_downstream_not_started(db):
-    t = _setup(db, n=8, seed=3)
-    m = next(m for m in _round(db, t, 1) if not m.is_bye)
+async def test_reedit_readvances_when_downstream_not_started(db):
+    t = await _setup(db, n=8, seed=3)
+    m = next(m for m in await _round(db, t, 1) if not m.is_bye)
     a, b = m.player_a_id, m.player_b_id
 
-    apply_scores(db, m, [GameInput(1, 15, 9)], "admin@test.dev")  # A wins
-    db.commit()
-    nxt = db.get(Match, m.next_match_id)
+    await apply_scores(db, m, [GameInput(1, 15, 9)], "admin@test.dev")  # A wins
+    await db.commit()
+    nxt = await db.get(Match, m.next_match_id)
     slot_is_a = m.position_in_round % 2 == 0
     assert (nxt.player_a_id if slot_is_a else nxt.player_b_id) == a
 
     # Correct the result so B wins; downstream hasn't started -> silent re-advance.
-    apply_scores(db, m, [GameInput(1, 9, 15)], "admin@test.dev")
-    db.commit()
+    await apply_scores(db, m, [GameInput(1, 9, 15)], "admin@test.dev")
+    await db.commit()
     assert m.winner_id == b
     assert (nxt.player_a_id if slot_is_a else nxt.player_b_id) == b
 
 
-def test_reedit_blocked_when_downstream_started(db):
-    t = _setup(db, n=8, seed=3)
-    r1 = _round(db, t, 1)
+async def test_reedit_blocked_when_downstream_started(db):
+    t = await _setup(db, n=8, seed=3)
+    r1 = await _round(db, t, 1)
     # Find two Round-1 matches that feed the same Round-2 match.
     m0 = next(m for m in r1 if not m.is_bye)
     sibling = next(
         m for m in r1 if m.next_match_id == m0.next_match_id and m.id != m0.id
     )
-    apply_scores(db, m0, [GameInput(1, 15, 9)], "admin@test.dev")
-    apply_scores(db, sibling, [GameInput(1, 15, 9)], "admin@test.dev")
-    db.commit()
+    await apply_scores(db, m0, [GameInput(1, 15, 9)], "admin@test.dev")
+    await apply_scores(db, sibling, [GameInput(1, 15, 9)], "admin@test.dev")
+    await db.commit()
 
     # Now the Round-2 match has both players; start it.
-    nxt = db.get(Match, m0.next_match_id)
-    apply_scores(db, nxt, [GameInput(1, 15, 12)], "admin@test.dev")
-    db.commit()
+    nxt = await db.get(Match, m0.next_match_id)
+    await apply_scores(db, nxt, [GameInput(1, 15, 12)], "admin@test.dev")
+    await db.commit()
 
     # Re-editing m0 to flip its winner must be blocked.
     with pytest.raises(ScoringError):
-        apply_scores(db, m0, [GameInput(1, 9, 15)], "admin@test.dev")
+        await apply_scores(db, m0, [GameInput(1, 9, 15)], "admin@test.dev")
 
 
 # --------------------------------------------------------------------------
 # No-show: distinct from RET — the match never started, so no partial score
 # is kept, and the opponent wins immediately.
 # --------------------------------------------------------------------------
-def test_no_show_advances_opponent_with_no_games(db):
-    t = _setup(db, n=8, seed=3)
-    m = next(m for m in _round(db, t, 1) if not m.is_bye)
+async def test_no_show_advances_opponent_with_no_games(db):
+    t = await _setup(db, n=8, seed=3)
+    m = next(m for m in await _round(db, t, 1) if not m.is_bye)
     absent = m.player_a_id
     opponent = m.player_b_id
 
-    set_no_show(db, m, absent, "admin@test.dev")
-    db.commit()
+    await set_no_show(db, m, absent, "admin@test.dev")
+    await db.commit()
 
     assert m.winner_id == opponent
     assert m.no_show_player_id == absent
     assert m.retired_player_id is None
     assert m.status == MatchStatus.completed
     assert len(m.games) == 0  # no-show keeps no partial score (unlike RET)
-    nxt = db.get(Match, m.next_match_id)
+    nxt = await db.get(Match, m.next_match_id)
     advanced = nxt.player_a_id if m.position_in_round % 2 == 0 else nxt.player_b_id
     assert advanced == opponent
 
 
-def test_no_show_discards_any_partial_score_already_entered(db):
-    t = _setup(db, n=8, seed=3)
-    m = next(m for m in _round(db, t, 1) if not m.is_bye)
+async def test_no_show_discards_any_partial_score_already_entered(db):
+    t = await _setup(db, n=8, seed=3)
+    m = next(m for m in await _round(db, t, 1) if not m.is_bye)
     absent = m.player_a_id
 
-    apply_scores(db, m, [GameInput(1, 8, 6)], "admin@test.dev")
-    db.commit()
+    await apply_scores(db, m, [GameInput(1, 8, 6)], "admin@test.dev")
+    await db.commit()
     assert len(m.games) == 1
 
-    set_no_show(db, m, absent, "admin@test.dev")
-    db.commit()
+    await set_no_show(db, m, absent, "admin@test.dev")
+    await db.commit()
     assert len(m.games) == 0  # no-show clears it, unlike RET which preserves it
 
 
-def test_no_show_and_retire_are_mutually_exclusive(db):
-    t = _setup(db, n=8, seed=3)
-    m = next(m for m in _round(db, t, 1) if not m.is_bye)
+async def test_no_show_and_retire_are_mutually_exclusive(db):
+    t = await _setup(db, n=8, seed=3)
+    m = next(m for m in await _round(db, t, 1) if not m.is_bye)
     a, b = m.player_a_id, m.player_b_id
 
-    set_retirement(db, m, a, "admin@test.dev")
+    await set_retirement(db, m, a, "admin@test.dev")
     assert m.retired_player_id == a
-    set_no_show(db, m, b, "admin@test.dev")
+    await set_no_show(db, m, b, "admin@test.dev")
     assert m.no_show_player_id == b
     assert m.retired_player_id is None  # setting no-show clears a prior RET
     assert m.winner_id == a  # b (no-show) loses, a wins
 
 
-def test_clear_no_show_returns_to_pending(db):
-    t = _setup(db, n=8, seed=3)
-    m = next(m for m in _round(db, t, 1) if not m.is_bye)
+async def test_clear_no_show_returns_to_pending(db):
+    t = await _setup(db, n=8, seed=3)
+    m = next(m for m in await _round(db, t, 1) if not m.is_bye)
     absent = m.player_a_id
 
-    set_no_show(db, m, absent, "admin@test.dev")
-    db.commit()
-    clear_no_show(db, m, "admin@test.dev")
-    db.commit()
+    await set_no_show(db, m, absent, "admin@test.dev")
+    await db.commit()
+    await clear_no_show(db, m, "admin@test.dev")
+    await db.commit()
 
     assert m.no_show_player_id is None
     assert m.winner_id is None
     assert m.status == MatchStatus.pending
 
 
-def test_no_show_blocked_on_bye(db):
-    t = _setup(db, n=7, seed=3)  # odd count guarantees at least one bye
-    m = next(m for m in _round(db, t, 1) if m.is_bye)
+async def test_no_show_blocked_on_bye(db):
+    t = await _setup(db, n=7, seed=3)  # odd count guarantees at least one bye
+    m = next(m for m in await _round(db, t, 1) if m.is_bye)
     real_player = m.player_a_id if m.player_a_id is not None else m.player_b_id
     with pytest.raises(ScoringError):
-        set_no_show(db, m, real_player, "admin@test.dev")
+        await set_no_show(db, m, real_player, "admin@test.dev")
 
 
-def test_no_show_rejects_player_not_in_match(db):
-    t = _setup(db, n=8, seed=3)
-    matches = _round(db, t, 1)
+async def test_no_show_rejects_player_not_in_match(db):
+    t = await _setup(db, n=8, seed=3)
+    matches = await _round(db, t, 1)
     m = next(m for m in matches if not m.is_bye)
     other = next(m2 for m2 in matches if m2.id != m.id and not m2.is_bye)
     stranger = other.player_a_id
     with pytest.raises(ScoringError):
-        set_no_show(db, m, stranger, "admin@test.dev")
+        await set_no_show(db, m, stranger, "admin@test.dev")
 
 
-def test_no_show_blocked_when_downstream_started(db):
-    t = _setup(db, n=8, seed=3)
-    r1 = _round(db, t, 1)
+async def test_no_show_blocked_when_downstream_started(db):
+    t = await _setup(db, n=8, seed=3)
+    r1 = await _round(db, t, 1)
     m0 = next(m for m in r1 if not m.is_bye)
     sibling = next(m for m in r1 if m.next_match_id == m0.next_match_id and m.id != m0.id)
-    apply_scores(db, m0, [GameInput(1, 15, 9)], "admin@test.dev")
-    apply_scores(db, sibling, [GameInput(1, 15, 9)], "admin@test.dev")
-    db.commit()
-    nxt = db.get(Match, m0.next_match_id)
-    apply_scores(db, nxt, [GameInput(1, 15, 12)], "admin@test.dev")
-    db.commit()
+    await apply_scores(db, m0, [GameInput(1, 15, 9)], "admin@test.dev")
+    await apply_scores(db, sibling, [GameInput(1, 15, 9)], "admin@test.dev")
+    await db.commit()
+    nxt = await db.get(Match, m0.next_match_id)
+    await apply_scores(db, nxt, [GameInput(1, 15, 12)], "admin@test.dev")
+    await db.commit()
 
     # m0's winner already advanced into a started match; marking THAT winner as
     # a no-show would flip the result, which must be blocked, same guard as a
     # score re-edit that changes the winner.
     with pytest.raises(ScoringError):
-        set_no_show(db, m0, m0.winner_id, "admin@test.dev")
+        await set_no_show(db, m0, m0.winner_id, "admin@test.dev")

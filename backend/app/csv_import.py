@@ -11,7 +11,8 @@ import io
 import re
 from dataclasses import dataclass, field
 
-from sqlalchemy.orm import Session
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from .models import Category, Player
 
@@ -239,7 +240,7 @@ def _ts(s: str) -> tuple | None:
     return (y, mo, d, h, mi, se)
 
 
-def import_csv(db: Session, content: str) -> ImportReport:
+async def import_csv(db: AsyncSession, content: str) -> ImportReport:
     """Full pipeline. Idempotent upsert keyed on (category, dedup_key).
 
     Existing group assignments and walk-in flags are preserved on re-import.
@@ -249,7 +250,8 @@ def import_csv(db: Session, content: str) -> ImportReport:
     # Load every existing player once and index them in memory. Doing a query per
     # row means hundreds of round-trips, which is slow against a remote DB.
     existing_by_key: dict[tuple[str, Category], Player] = {
-        (p.dedup_key, p.category): p for p in db.query(Player).all()
+        (p.dedup_key, p.category): p
+        for p in (await db.execute(select(Player))).scalars()
     }
 
     for pr in parsed_rows:
@@ -279,5 +281,5 @@ def import_csv(db: Session, content: str) -> ImportReport:
         report.per_category_counts[pr.category.value] += 1
 
     report.imported = len(parsed_rows)
-    db.commit()
+    await db.commit()
     return report

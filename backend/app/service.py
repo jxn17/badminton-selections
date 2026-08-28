@@ -4,7 +4,8 @@ from __future__ import annotations
 import random
 import re
 
-from sqlalchemy.orm import Session
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from .csv_import import dedup_key_for, extract_candidate_phones, normalize_phone
 from .draw import generate_draw
@@ -25,82 +26,89 @@ def default_format(tournament_id: int) -> RoundFormat:
     )
 
 
-def get_or_create_tournament(
-    db: Session, category: Category, group_label: str | None
+async def get_or_create_tournament(
+    db: AsyncSession, category: Category, group_label: str | None
 ) -> Tournament:
-    t = (
-        db.query(Tournament)
-        .filter(Tournament.category == category)
-        .filter(
-            Tournament.group_label.is_(None)
-            if group_label is None
-            else Tournament.group_label == group_label
-        )
-        .one_or_none()
-    )
+    t = await find_tournament(db, category, group_label)
     if t is None:
         t = Tournament(category=category, group_label=group_label, status=TournamentStatus.draft)
         db.add(t)
-        db.flush()
+        await db.flush()
         db.add(default_format(t.id))
-        db.flush()
+        await db.flush()
     return t
 
 
-def rebuild_men(db: Session, seed: int | None = None) -> dict:
+async def find_tournament(
+    db: AsyncSession, category: Category, group_label: str | None
+) -> Tournament | None:
+    """The one tournament for a (category, group). Women's group_label is NULL."""
+    stmt = select(Tournament).where(Tournament.category == category).where(
+        Tournament.group_label.is_(None)
+        if group_label is None
+        else Tournament.group_label == group_label
+    )
+    return (await db.execute(stmt)).scalar_one_or_none()
+
+
+async def rebuild_men(db: AsyncSession, seed: int | None = None) -> dict:
     """Assign the 4 balanced groups and generate each group's draw (draft only)."""
     if seed is None:
         seed = random.SystemRandom().randint(1, 2**31 - 1)
-    counts = assign_men_groups(db, seed)
+    counts = await assign_men_groups(db, seed)
 
     results = {}
     for i, label in enumerate(GROUP_LABELS):
-        t = get_or_create_tournament(db, Category.men, label)
+        t = await get_or_create_tournament(db, Category.men, label)
         if t.status == TournamentStatus.locked:
             results[label] = {"skipped": "locked"}
             continue
-        generate_draw(db, t, seed=seed + 100 + i)
+        await generate_draw(db, t, seed=seed + 100 + i)
         results[label] = {
             "count": counts[label],
             "bracket_size": t.bracket_size,
             "num_byes": t.num_byes,
         }
-    db.commit()
+    await db.commit()
     return {"seed": seed, "groups": results}
 
 
-def rebuild_women(db: Session, seed: int | None = None) -> dict:
+async def rebuild_women(db: AsyncSession, seed: int | None = None) -> dict:
     if seed is None:
         seed = random.SystemRandom().randint(1, 2**31 - 1)
-    t = get_or_create_tournament(db, Category.women, None)
+    t = await get_or_create_tournament(db, Category.women, None)
     if t.status == TournamentStatus.locked:
-        db.commit()
+        await db.commit()
         return {"skipped": "locked"}
-    generate_draw(db, t, seed=seed)
-    db.commit()
+    await generate_draw(db, t, seed=seed)
+    await db.commit()
     return {"seed": seed, "bracket_size": t.bracket_size, "num_byes": t.num_byes}
 
 
 # --------------------------------------------------------------------------
 # Roster edits: swap players, add walk-ins
 # --------------------------------------------------------------------------
-def _round1_slot(db: Session, tournament_id: int, player_id: int) -> tuple[Match, str] | None:
+async def _round1_slot(
+    db: AsyncSession, tournament_id: int, player_id: int
+) -> tuple[Match, str] | None:
     """Find the Round-1 match + slot ('a'/'b') where a player currently sits."""
     m = (
-        db.query(Match)
-        .filter(
-            Match.tournament_id == tournament_id,
-            Match.round_number == 1,
-            (Match.player_a_id == player_id) | (Match.player_b_id == player_id),
+        await db.execute(
+            select(Match).where(
+                Match.tournament_id == tournament_id,
+                Match.round_number == 1,
+                (Match.player_a_id == player_id) | (Match.player_b_id == player_id),
+            )
         )
-        .one_or_none()
-    )
+    ).scalar_one_or_none()
     if m is None:
         return None
     return (m, "a" if m.player_a_id == player_id else "b")
 
 
-def swap_players(db: Session, tournament: Tournament, player_x: int, player_y: int) -> None:
+async def swap_players(
+    db: AsyncSession, tournament: Tournament, player_x: int, player_y: int
+) -> None:
     """Swap two players' Round-1 positions (e.g. rebalancing who plays whom).
 
     Both must be real players in non-bye, not-yet-decided Round-1 matches. This
@@ -108,8 +116,8 @@ def swap_players(db: Session, tournament: Tournament, player_x: int, player_y: i
     """
     if player_x == player_y:
         raise ScoringError("Pick two different players to swap.")
-    sx = _round1_slot(db, tournament.id, player_x)
-    sy = _round1_slot(db, tournament.id, player_y)
+    sx = await _round1_slot(db, tournament.id, player_x)
+    sy = await _round1_slot(db, tournament.id, player_y)
     if sx is None or sy is None:
         raise ScoringError("Both players must be in this group's first round.")
     (mx, slot_x), (my, slot_y) = sx, sy
@@ -127,11 +135,11 @@ def swap_players(db: Session, tournament: Tournament, player_x: int, player_y: i
         my.player_a_id = player_x
     else:
         my.player_b_id = player_x
-    db.flush()
+    await db.flush()
 
 
-def add_walkin(
-    db: Session,
+async def add_walkin(
+    db: AsyncSession,
     category: Category,
     name: str,
     phone: str,
@@ -148,7 +156,10 @@ def add_walkin(
     # For men, auto-pick the smallest group unless one was chosen.
     if category == Category.men and not group_label:
         counts = {g: 0 for g in GROUP_LABELS}
-        for (g,) in db.query(Player.group_label).filter(Player.category == Category.men).all():
+        rows = await db.execute(
+            select(Player.group_label).where(Player.category == Category.men)
+        )
+        for (g,) in rows:
             if g in counts:
                 counts[g] += 1
         group_label = min(counts, key=counts.get)
@@ -166,9 +177,9 @@ def add_walkin(
         is_walkin=True,
     )
     db.add(player)
-    db.flush()
+    await db.flush()
 
-    placed_into = _place_into_open_bye(db, category, group_label, player.id)
+    placed_into = await _place_into_open_bye(db, category, group_label, player.id)
     return {
         "player_id": player.id,
         "group_label": group_label,
@@ -177,25 +188,25 @@ def add_walkin(
     }
 
 
-def remove_player(db: Session, player_id: int) -> dict:
+async def remove_player(db: AsyncSession, player_id: int) -> dict:
     """Remove a player (withdrawal). If they're in a not-yet-played Round-1 match,
     the opponent gets a walkover and advances. Blocks if the player has already
     played or advanced into a started match (reset those first)."""
-    p = db.get(Player, player_id)
+    p = await db.get(Player, player_id)
     if p is None:
         raise ScoringError("Player not found.")
     name = p.full_name
 
     r1 = (
-        db.query(Match)
-        .filter(
-            Match.round_number == 1,
-            (Match.player_a_id == p.id) | (Match.player_b_id == p.id),
+        await db.execute(
+            select(Match).where(
+                Match.round_number == 1,
+                (Match.player_a_id == p.id) | (Match.player_b_id == p.id),
+            )
         )
-        .one_or_none()
-    )
+    ).scalar_one_or_none()
     if r1 is not None:
-        nxt = db.get(Match, r1.next_match_id) if r1.next_match_id else None
+        nxt = await db.get(Match, r1.next_match_id) if r1.next_match_id else None
         # They already won a real match and moved on.
         if r1.status == MatchStatus.completed and not r1.is_bye:
             raise ScoringError("This player has already played a match — reset it first, then remove.")
@@ -205,15 +216,14 @@ def remove_player(db: Session, player_id: int) -> dict:
 
         # Pull any advancement this match produced back out.
         if r1.winner_id is not None and nxt is not None:
-            _withdraw(db, r1)
+            await _withdraw(db, r1)
 
         # Vacate the player's slot.
         if r1.player_a_id == p.id:
             r1.player_a_id = None
         else:
             r1.player_b_id = None
-        for g in list(r1.games):
-            db.delete(g)
+        r1.games.clear()
 
         opponent = r1.player_a_id if r1.player_a_id is not None else r1.player_b_id
         if opponent is not None:
@@ -221,43 +231,43 @@ def remove_player(db: Session, player_id: int) -> dict:
             r1.is_bye = True
             r1.winner_id = opponent
             r1.status = MatchStatus.completed
-            _advance(db, r1)
+            await _advance(db, r1)
         else:
             r1.is_bye = False
             r1.winner_id = None
             r1.status = MatchStatus.pending
-        db.flush()
+        await db.flush()
 
-    db.delete(p)
-    db.flush()
+    await db.delete(p)
+    await db.flush()
     return {"removed": player_id, "name": name}
 
 
-def _place_into_open_bye(
-    db: Session, category: Category, group_label: str | None, player_id: int
+async def _place_into_open_bye(
+    db: AsyncSession, category: Category, group_label: str | None, player_id: int
 ) -> int | None:
     """Convert an available Round-1 bye (whose next match hasn't started) into a
     real match by dropping the walk-in onto the empty side. Returns match id."""
-    t = (
-        db.query(Tournament)
-        .filter(Tournament.category == category)
-        .filter(
-            Tournament.group_label.is_(None)
-            if group_label is None
-            else Tournament.group_label == group_label
-        )
-        .one_or_none()
-    )
+    t = await find_tournament(db, category, group_label)
     if t is None:
         return None
     byes = (
-        db.query(Match)
-        .filter(Match.tournament_id == t.id, Match.round_number == 1, Match.is_bye.is_(True))
-        .order_by(Match.position_in_round)
+        (
+            await db.execute(
+                select(Match)
+                .where(
+                    Match.tournament_id == t.id,
+                    Match.round_number == 1,
+                    Match.is_bye.is_(True),
+                )
+                .order_by(Match.position_in_round)
+            )
+        )
+        .scalars()
         .all()
     )
     for m in byes:
-        nxt = db.get(Match, m.next_match_id) if m.next_match_id else None
+        nxt = await db.get(Match, m.next_match_id) if m.next_match_id else None
         if _is_started(nxt):
             continue  # the bye winner already progressed into a live match
         # Withdraw the auto-advanced bye winner from the next match, then contest it.
@@ -273,7 +283,7 @@ def _place_into_open_bye(
         m.is_bye = False
         m.winner_id = None
         m.status = MatchStatus.pending
-        db.flush()
+        await db.flush()
         return m.id
     return None
 
@@ -282,22 +292,24 @@ def _place_into_open_bye(
 # --------------------------------------------------------------------------
 # Moving players between groups (day-scheduling: e.g. "these can only come Sunday")
 # --------------------------------------------------------------------------
-def _group_has_played_matches(db: Session, tournament: Tournament) -> bool:
+async def _group_has_played_matches(db: AsyncSession, tournament: Tournament) -> bool:
     """True if any real (non-bye) match in this group already has a result."""
-    return (
-        db.query(Match)
-        .filter(
-            Match.tournament_id == tournament.id,
-            Match.is_bye.is_(False),
-            (Match.winner_id.isnot(None)) | (Match.status != MatchStatus.pending),
+    row = (
+        await db.execute(
+            select(Match.id)
+            .where(
+                Match.tournament_id == tournament.id,
+                Match.is_bye.is_(False),
+                (Match.winner_id.isnot(None)) | (Match.status != MatchStatus.pending),
+            )
+            .limit(1)
         )
-        .first()
-        is not None
-    )
+    ).first()
+    return row is not None
 
 
-def move_players_to_groups(
-    db: Session,
+async def move_players_to_groups(
+    db: AsyncSession,
     phones: list[str],
     target_groups: list[str],
     category: Category = Category.men,
@@ -328,10 +340,12 @@ def move_players_to_groups(
             not_found.append(raw)
             continue
         p = (
-            db.query(Player)
-            .filter(Player.phone_normalized == norm, Player.category == category)
-            .one_or_none()
-        )
+            await db.execute(
+                select(Player).where(
+                    Player.phone_normalized == norm, Player.category == category
+                )
+            )
+        ).scalars().first()
         if p is None:
             not_found.append(raw)
         elif p.id not in seen_ids:
@@ -344,18 +358,13 @@ def move_players_to_groups(
 
     # --- Guard: never wipe entered scores ---
     affected_labels = {p.group_label for p in to_move if p.group_label} | set(target_groups)
-    tournaments = {
-        g: db.query(Tournament)
-        .filter(Tournament.category == category, Tournament.group_label == g)
-        .one_or_none()
-        for g in affected_labels
-    }
+    tournaments = {g: await find_tournament(db, category, g) for g in affected_labels}
     for g, t in tournaments.items():
         if t is None:
             continue
         if t.status == TournamentStatus.locked:
             raise ScoringError(f"Group {g} is locked. Unlock it before moving players.")
-        if _group_has_played_matches(db, t):
+        if await _group_has_played_matches(db, t):
             raise ScoringError(
                 f"Group {g} already has match results. Moving players would discard them."
             )
@@ -372,15 +381,17 @@ def move_players_to_groups(
             target = order[idx % len(order)]
             idx += 1
             partner = (
-                db.query(Player)
-                .filter(
-                    Player.category == category,
-                    Player.group_label == target,
-                    Player.id.notin_(protected),
+                await db.execute(
+                    select(Player)
+                    .where(
+                        Player.category == category,
+                        Player.group_label == target,
+                        Player.id.notin_(protected),
+                    )
+                    .order_by(Player.id)
+                    .limit(1)
                 )
-                .order_by(Player.id)
-                .first()
-            )
+            ).scalars().first()
             if partner is None:
                 continue
             origin = p.group_label
@@ -402,22 +413,18 @@ def move_players_to_groups(
             break
         if not placed:
             failed.append({"name": p.full_name, "reason": "no swap partner available"})
-    db.flush()
+    await db.flush()
 
     # --- Redraw every affected group so brackets match the new rosters ---
     redrawn = []
     for g in sorted(x for x in affected_labels if x):
-        t = (
-            db.query(Tournament)
-            .filter(Tournament.category == category, Tournament.group_label == g)
-            .one_or_none()
-        )
+        t = await find_tournament(db, category, g)
         if t is None or t.status == TournamentStatus.locked:
             continue
-        generate_draw(db, t)
+        await generate_draw(db, t)
         redrawn.append(g)
 
-    db.commit()
+    await db.commit()
     return {
         "moved": moved,
         "already_in_target": [
@@ -450,8 +457,8 @@ def _fmt_hhmm(total: int) -> str:
     return f"{h12}:{m:02d}{suffix}"
 
 
-def schedule_day(
-    db: Session,
+async def schedule_day(
+    db: AsyncSession,
     targets: list[dict],
     day_label: str,
     start: str,
@@ -488,16 +495,7 @@ def schedule_day(
     for tgt in targets:
         cat = Category(tgt["category"])
         grp = tgt.get("group") or None
-        t = (
-            db.query(Tournament)
-            .filter(Tournament.category == cat)
-            .filter(
-                Tournament.group_label.is_(None)
-                if grp is None
-                else Tournament.group_label == grp
-            )
-            .one_or_none()
-        )
+        t = await find_tournament(db, cat, grp)
         if t is None:
             raise ScoringError(f"No draw for {cat.value} {grp or ''}".strip() + ".")
         tournaments.append(t)
@@ -508,7 +506,11 @@ def schedule_day(
     for raw in unavailable_phones or []:
         norm = normalize_phone(raw)
         p = (
-            db.query(Player).filter(Player.phone_normalized == norm).first()
+            (
+                await db.execute(
+                    select(Player).where(Player.phone_normalized == norm).limit(1)
+                )
+            ).scalars().first()
             if norm
             else None
         )
@@ -519,12 +521,17 @@ def schedule_day(
 
     # All playable matches, earliest round first, groups interleaved within a round.
     matches = (
-        db.query(Match)
-        .filter(
-            Match.tournament_id.in_([t.id for t in tournaments]),
-            Match.is_bye.is_(False),
+        (
+            await db.execute(
+                select(Match)
+                .where(
+                    Match.tournament_id.in_([t.id for t in tournaments]),
+                    Match.is_bye.is_(False),
+                )
+                .order_by(Match.round_number, Match.position_in_round, Match.tournament_id)
+            )
         )
-        .order_by(Match.round_number, Match.position_in_round, Match.tournament_id)
+        .scalars()
         .all()
     )
 
@@ -558,7 +565,7 @@ def schedule_day(
         per_round[m.round_number] = per_round.get(m.round_number, 0) + 1
         last_time = _fmt_hhmm(t_min + minutes_per_match)
 
-    db.commit()
+    await db.commit()
     return {
         "scheduled": scheduled,
         "unscheduled": max(0, len(playable) - scheduled),
@@ -573,62 +580,52 @@ def schedule_day(
     }
 
 
-def clear_schedule(db: Session, targets: list[dict]) -> dict:
+async def clear_schedule(db: AsyncSession, targets: list[dict]) -> dict:
     """Wipe scheduled times for the given groups."""
     ids = []
     for tgt in targets:
-        cat = Category(tgt["category"])
-        grp = tgt.get("group") or None
-        t = (
-            db.query(Tournament)
-            .filter(Tournament.category == cat)
-            .filter(
-                Tournament.group_label.is_(None)
-                if grp is None
-                else Tournament.group_label == grp
-            )
-            .one_or_none()
-        )
+        t = await find_tournament(db, Category(tgt["category"]), tgt.get("group") or None)
         if t is not None:
             ids.append(t.id)
     n = 0
-    for m in db.query(Match).filter(Match.tournament_id.in_(ids)).all():
+    rows = (
+        (await db.execute(select(Match).where(Match.tournament_id.in_(ids))))
+        .scalars()
+        .all()
+    )
+    for m in rows:
         if m.scheduled_time:
             m.scheduled_time = None
             n += 1
-    db.commit()
+    await db.commit()
     return {"cleared": n}
 
 
 # --------------------------------------------------------------------------
 # Schedule specific players by pasting free text (auto-detects phone numbers)
 # --------------------------------------------------------------------------
-def _current_active_match(db: Session, player: Player) -> Match | None:
+async def _current_active_match(db: AsyncSession, player: Player) -> Match | None:
     """The match this player is waiting to play right now: their tournament's
     latest non-bye, not-yet-completed match with both slots filled in. Returns
     None if they've been eliminated, already finished their run, or their
     opponent isn't decided yet."""
-    t = (
-        db.query(Tournament)
-        .filter(Tournament.category == player.category)
-        .filter(
-            Tournament.group_label.is_(None)
-            if player.group_label is None
-            else Tournament.group_label == player.group_label
-        )
-        .one_or_none()
-    )
+    t = await find_tournament(db, player.category, player.group_label)
     if t is None:
         return None
     candidates = (
-        db.query(Match)
-        .filter(
-            Match.tournament_id == t.id,
-            Match.is_bye.is_(False),
-            Match.status != MatchStatus.completed,
-            (Match.player_a_id == player.id) | (Match.player_b_id == player.id),
+        (
+            await db.execute(
+                select(Match)
+                .where(
+                    Match.tournament_id == t.id,
+                    Match.is_bye.is_(False),
+                    Match.status != MatchStatus.completed,
+                    (Match.player_a_id == player.id) | (Match.player_b_id == player.id),
+                )
+                .order_by(Match.round_number.desc())
+            )
         )
-        .order_by(Match.round_number.desc())
+        .scalars()
         .all()
     )
     for m in candidates:
@@ -637,8 +634,8 @@ def _current_active_match(db: Session, player: Player) -> Match | None:
     return None
 
 
-def schedule_specific_players(
-    db: Session,
+async def schedule_specific_players(
+    db: AsyncSession,
     text: str,
     day_label: str,
     start: str,
@@ -670,7 +667,13 @@ def schedule_specific_players(
 
     players_by_norm = {
         p.phone_normalized: p
-        for p in db.query(Player).filter(Player.phone_normalized.in_(normalized_to_raw.keys())).all()
+        for p in (
+            await db.execute(
+                select(Player).where(
+                    Player.phone_normalized.in_(normalized_to_raw.keys())
+                )
+            )
+        ).scalars()
     }
 
     resolved: list[Player] = []
@@ -688,7 +691,7 @@ def schedule_specific_players(
     matches: list[Match] = []
     no_active_match: list[str] = []
     for p in resolved:
-        m = _current_active_match(db, p)
+        m = await _current_active_match(db, p)
         if m is None:
             no_active_match.append(p.full_name)
             continue
@@ -703,7 +706,7 @@ def schedule_specific_players(
         m.scheduled_time = f"{day_label} {_fmt_hhmm(t_min)} {courts[court_idx]}".strip()
         scheduled.append({"match_id": m.id, "scheduled_time": m.scheduled_time})
 
-    db.commit()
+    await db.commit()
     return {
         "scheduled": scheduled,
         "not_found": not_found,

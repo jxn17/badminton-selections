@@ -6,6 +6,7 @@ For the real event, import the real CSV through the admin UI instead.
 """
 from __future__ import annotations
 
+import asyncio
 import os
 
 from app.csv_import import import_csv
@@ -15,20 +16,19 @@ from app.service import rebuild_men, rebuild_women
 SAMPLE = os.path.join(os.path.dirname(__file__), "..", "sample_data", "entries_sample.csv")
 
 
-def main() -> None:
-    Base.metadata.create_all(bind=engine)
-    db = SessionLocal()
-    try:
+async def main() -> None:
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    async with SessionLocal() as db:
         with open(SAMPLE, encoding="utf-8") as f:
-            report = import_csv(db, f.read())
+            report = await import_csv(db, f.read())
         print("Import:", report.per_category_counts,
               "| duplicates:", report.duplicates_dropped,
               "| skipped:", report.skipped_invalid)
-        print("Men:", rebuild_men(db, seed=2026))
-        print("Women:", rebuild_women(db, seed=777))
-    finally:
-        db.close()
+        print("Men:", await rebuild_men(db, seed=2026))
+        print("Women:", await rebuild_women(db, seed=777))
+    await engine.dispose()
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

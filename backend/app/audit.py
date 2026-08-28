@@ -4,7 +4,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from .models import AuditLog, Game, Match
 
@@ -16,7 +16,12 @@ def _json_default(o):
 
 
 def match_snapshot(match: Match) -> dict:
-    """Serializable snapshot of a match's scoreable state for before/after diffs."""
+    """Serializable snapshot of a match's scoreable state for before/after diffs.
+
+    `match.games` is eager-loaded (see models.Match), so this stays a plain
+    synchronous read with no hidden IO — which is what makes it safe to call
+    from async handlers.
+    """
     return {
         "id": match.id,
         "status": match.status.value if match.status else None,
@@ -33,7 +38,7 @@ def match_snapshot(match: Match) -> dict:
 
 
 def record(
-    db: Session,
+    db: AsyncSession,
     admin_email: str,
     action: str,
     entity: str,

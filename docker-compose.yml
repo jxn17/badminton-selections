@@ -26,7 +26,8 @@ services:
       db:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgresql+psycopg2://badminton:badminton@db:5432/badminton
+      # Any spelling works — the app normalizes it to the asyncpg driver.
+      DATABASE_URL: postgresql+asyncpg://badminton:badminton@db:5432/badminton
       ADMIN_ACCESS_CODE: ${ADMIN_ACCESS_CODE:-trials2026}
       SECRET_KEY: ${SECRET_KEY:-dev-insecure-secret-change-me}
       FRONTEND_URL: ${FRONTEND_URL:-http://localhost:8000}
