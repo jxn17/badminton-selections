@@ -21,9 +21,19 @@ const PRESETS: Preset[] = [
     note: "Run this FIRST. Paste any player who can't make Saturday below — their matches are held for Sunday.",
   },
   {
-    name: "Sun — Men C & D",
+    name: "Sun — Men C & D (+ A/B overflow)",
     day: "Sun", start: "09:00", end: "17:00", courts: "Court 1, Court 2",
-    targets: [{ category: "men", group: "C" }, { category: "men", group: "D" }],
+    targets: [
+      { category: "men", group: "A" },
+      { category: "men", group: "B" },
+      { category: "men", group: "C" },
+      { category: "men", group: "D" },
+    ],
+    onlyUnscheduled: true,
+    note:
+      "Run this AFTER the Saturday A & B pass. Schedules C & D, plus any A/B " +
+      "matches that didn't fit into Saturday — all on the same two courts, " +
+      "earliest rounds first — without touching the times Saturday already set.",
   },
   {
     name: "Sun — Women (rest)",
