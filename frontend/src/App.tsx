@@ -170,22 +170,25 @@ export default function App() {
 
         {/* Group navbar */}
         <div className="flex items-center gap-3 flex-wrap mb-4">
-          <div className="flex items-center gap-1">
-            <span className="text-xs font-semibold text-slate-400 uppercase mr-1">Men</span>
-            {menGroups.map((g) => (
-              <TabButton
-                key={g.group_label}
-                active={sel?.category === "men" && sel?.group === g.group_label}
-                onClick={() => pickGroup(g)}
-                locked={g.status === "locked"}
-              >
-                Group {g.group_label}
-                <span className="ml-1 text-[10px] opacity-70">{g.player_count}</span>
-              </TabButton>
-            ))}
-            {menGroups.length === 0 && <span className="text-xs text-slate-400">no draw yet</span>}
-          </div>
-          <div className="w-px h-6 bg-slate-200" />
+          {menGroups.length > 0 && (
+            <>
+              <div className="flex items-center gap-1">
+                <span className="text-xs font-semibold text-slate-400 uppercase mr-1">Men</span>
+                {menGroups.map((g) => (
+                  <TabButton
+                    key={g.group_label}
+                    active={sel?.category === "men" && sel?.group === g.group_label}
+                    onClick={() => pickGroup(g)}
+                    locked={g.status === "locked"}
+                  >
+                    Group {g.group_label}
+                    <span className="ml-1 text-[10px] opacity-70">{g.player_count}</span>
+                  </TabButton>
+                ))}
+              </div>
+              <div className="w-px h-6 bg-slate-200" />
+            </>
+          )}
           <div className="flex items-center gap-1">
             <span className="text-xs font-semibold text-slate-400 uppercase mr-1">Women</span>
             {womenGroup ? (
