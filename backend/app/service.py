@@ -109,10 +109,16 @@ async def _round1_slot(
 async def swap_players(
     db: AsyncSession, tournament: Tournament, player_x: int, player_y: int
 ) -> None:
-    """Swap two players' Round-1 positions (e.g. rebalancing who plays whom).
+    """Exchange two players' Round-1 positions (rebalancing who plays whom).
 
-    Both must be real players in non-bye, not-yet-decided Round-1 matches. This
-    keeps the bracket valid without touching byes or advancement.
+    Works whether either player is currently contesting a match OR sitting on a
+    bye — which is the common case, since a draw with byes has most of its field
+    on one. Swapping onto or off a bye re-settles that match's automatic
+    walkover winner and its Round-2 advancement, so the bracket stays valid.
+
+    Refuses only when a swap would discard a real result: a contested match that
+    has actually been played, or a bye whose winner has already advanced into a
+    Round-2 match that has itself started (reset that one first).
     """
     if player_x == player_y:
         raise ScoringError("Pick two different players to swap.")
@@ -121,20 +127,44 @@ async def swap_players(
     if sx is None or sy is None:
         raise ScoringError("Both players must be in this group's first round.")
     (mx, slot_x), (my, slot_y) = sx, sy
+
+    if mx.id == my.id:
+        raise ScoringError("Those two players already face each other.")
+
+    for m in (mx, my):
+        if not m.is_bye:
+            # A contested match that has been played can't be reshuffled without
+            # throwing away its scores.
+            if m.games or m.winner_id is not None or m.status != MatchStatus.pending:
+                raise ScoringError("Can't swap a player whose match has already been played.")
+        else:
+            # A bye's winner already sits in Round 2; only safe to move them while
+            # that downstream match hasn't started.
+            nxt = await db.get(Match, m.next_match_id) if m.next_match_id else None
+            if _is_started(nxt):
+                raise ScoringError(
+                    "Can't swap: the next-round match has already started. Reset it first."
+                )
+
+    # Pull each bye's auto-advanced winner back out of Round 2 before moving anyone.
+    for m in (mx, my):
+        if m.is_bye and m.winner_id is not None:
+            await _withdraw(db, m)
+
+    # Physically exchange the two players between their slots. is_bye is
+    # unchanged — each match keeps the same number of filled slots, only the
+    # identity of the real player in it changes.
+    setattr(mx, f"player_{slot_x}_id", player_y)
+    setattr(my, f"player_{slot_y}_id", player_x)
+    await db.flush()
+
+    # Re-settle each bye: its lone new occupant is the walkover winner, advanced
+    # into Round 2 in place of whoever we just withdrew.
     for m in (mx, my):
         if m.is_bye:
-            raise ScoringError("Can't swap a player who is on a bye. Use replace instead.")
-        if m.status == MatchStatus.completed or m.winner_id is not None or m.games:
-            raise ScoringError("Can't swap into a match that has already been played.")
-
-    if slot_x == "a":
-        mx.player_a_id = player_y
-    else:
-        mx.player_b_id = player_y
-    if slot_y == "a":
-        my.player_a_id = player_x
-    else:
-        my.player_b_id = player_x
+            m.winner_id = m.player_a_id if m.player_a_id is not None else m.player_b_id
+            m.status = MatchStatus.completed
+            await _advance(db, m)
     await db.flush()
 
 

@@ -11,8 +11,17 @@ import pytest
 from sqlalchemy import select
 
 from app.csv_import import import_csv
+from app.draw import generate_draw
 from app.grouping import GROUP_LABELS
-from app.models import Category, Match, MatchStatus, Player, Tournament, TournamentStatus
+from app.models import (
+    Category,
+    Match,
+    MatchStatus,
+    Player,
+    RoundFormat,
+    Tournament,
+    TournamentStatus,
+)
 from app.scoring import GameInput, ScoringError, apply_scores
 from app.service import (
     _fmt_hhmm,
@@ -235,6 +244,101 @@ async def test_swap_needs_two_different_players(drawn):
     m = next(x for x in await _matches(db, t, 1) if not x.is_bye)
     with pytest.raises(ScoringError):
         await swap_players(db, t, m.player_a_id, m.player_a_id)
+
+
+# A draw with byes — most of the field sits on one, so swapping bye players is
+# the common case, not a corner case.
+async def _bye_group(db, n=5, seed=7):
+    for i in range(n):
+        db.add(
+            Player(
+                full_name=f"P{i}",
+                phone_normalized=str(9000000000 + i),
+                dedup_key=f"ph:{9000000000 + i}",
+                category=Category.men,
+                group_label="A",
+            )
+        )
+    t = Tournament(category=Category.men, group_label="A", status=TournamentStatus.draft)
+    db.add(t)
+    await db.flush()
+    db.add(
+        RoundFormat(
+            tournament_id=t.id, round_number=None, points_to_win=21,
+            win_by_two=True, hard_cap=30, games_to_win_match=1,
+        )
+    )
+    await db.flush()
+    await generate_draw(db, t, seed=seed)  # 5 players -> bracket of 8, 3 byes
+    await db.commit()
+    return t
+
+
+def _occupant(m: Match) -> int:
+    return m.player_a_id if m.player_a_id is not None else m.player_b_id
+
+
+async def _advanced_into(db, m: Match) -> int | None:
+    nxt = await db.get(Match, m.next_match_id)
+    return nxt.player_a_id if m.position_in_round % 2 == 0 else nxt.player_b_id
+
+
+async def test_swap_two_bye_players_trades_positions_and_advancement(db):
+    """The bug fix: two players both sitting on byes can be exchanged, and each
+    bye's walkover winner + Round-2 advancement follows them."""
+    t = await _bye_group(db)
+    byes = [m for m in await _matches(db, t, 1) if m.is_bye]
+    assert len(byes) >= 2
+    m0, m1 = byes[0], byes[1]
+    p0, p1 = _occupant(m0), _occupant(m1)
+
+    await swap_players(db, t, p0, p1)
+    await db.commit()
+
+    assert _occupant(m0) == p1 and _occupant(m1) == p0
+    assert m0.winner_id == p1 and m1.winner_id == p0
+    assert await _advanced_into(db, m0) == p1
+    assert await _advanced_into(db, m1) == p0
+
+
+async def test_swap_bye_player_with_a_contested_player(db):
+    t = await _bye_group(db)
+    r1 = await _matches(db, t, 1)
+    bye = next(m for m in r1 if m.is_bye)
+    contested = next(m for m in r1 if not m.is_bye)
+    pb = _occupant(bye)
+    pc = contested.player_a_id
+
+    await swap_players(db, t, pb, pc)
+    await db.commit()
+
+    assert pc in (bye.player_a_id, bye.player_b_id)
+    assert pb in (contested.player_a_id, contested.player_b_id)
+    # The bye walks its new occupant over; the contested match stays unplayed.
+    assert bye.winner_id == pc
+    assert await _advanced_into(db, bye) == pc
+    assert contested.winner_id is None
+    assert contested.status == MatchStatus.pending
+
+
+async def test_swap_refuses_two_players_who_already_face_each_other(db):
+    t = await _bye_group(db)
+    contested = next(m for m in await _matches(db, t, 1) if not m.is_bye)
+    with pytest.raises(ScoringError, match="already face each other"):
+        await swap_players(db, t, contested.player_a_id, contested.player_b_id)
+
+
+async def test_swap_blocked_when_a_byes_next_round_match_has_started(db):
+    t = await _bye_group(db)
+    byes = [m for m in await _matches(db, t, 1) if m.is_bye]
+    first, second = byes[0], byes[1]
+    # Make the Round-2 match the first bye feeds look started.
+    nxt = await db.get(Match, first.next_match_id)
+    nxt.status = MatchStatus.in_progress
+    await db.commit()
+
+    with pytest.raises(ScoringError, match="next-round match"):
+        await swap_players(db, t, _occupant(first), _occupant(second))
 
 
 # --------------------------------------------------------------------------
