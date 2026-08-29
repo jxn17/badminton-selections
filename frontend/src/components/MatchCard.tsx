@@ -14,6 +14,9 @@ interface Props {
   // Flag/report only need to eventually update counts shown elsewhere (the
   // shortlist badge); the star/check itself flips instantly via local state.
   onCountsChanged: () => void;
+  // A player's *name* lives on the bracket payload rather than on the match, so
+  // renaming one needs a real refetch — a local match patch can't carry it.
+  onRosterChanged: () => void;
   swapMode: boolean;
   selectedForSwap: number | null;
   onSelectForSwap: (playerId: number) => void;
@@ -45,6 +48,7 @@ export default function MatchCard({
   editable,
   onMatchUpdated,
   onCountsChanged,
+  onRosterChanged,
   swapMode,
   selectedForSwap,
   onSelectForSwap,
@@ -63,6 +67,8 @@ export default function MatchCard({
   // trip lands — these are per-player UI signals, not match state.
   const [flagOverride, setFlagOverride] = useState<Record<number, boolean>>({});
   const [reportedOverride, setReportedOverride] = useState<Record<number, boolean>>({});
+  // Which side of this card is being edited in place ('a' | 'b' | null).
+  const [editingSlot, setEditingSlot] = useState<"a" | "b" | null>(null);
 
   // True while this admin has unsaved edits in the score boxes. The bracket
   // refetches every 15s; without this guard that refetch would wipe whatever is
@@ -275,6 +281,21 @@ export default function MatchCard({
     return reportedOverride[p.id] ?? p.reported;
   }
 
+  /** Rename the player themselves (the same entry the search edits). */
+  async function renamePlayer(p: Player, name: string) {
+    const updated = await api.updatePlayer(p.id, { full_name: name });
+    setEditingSlot(null);
+    onRosterChanged(); // full refetch: the name is on the bracket, not the match
+    return updated;
+  }
+
+  /** Fill a TBD slot, swap who occupies it, or clear it back to TBD. */
+  async function assignSlot(slot: "a" | "b", playerId: number | null) {
+    const updated = await api.setMatchSlot(match.id, slot, playerId);
+    setEditingSlot(null);
+    patch(updated);
+  }
+
   async function saveTime() {
     try {
       const updated = await api.setSchedule(match.id, time);
@@ -303,6 +324,9 @@ export default function MatchCard({
     const isByeSlot = match.is_bye && id === null;
     const tag = p ? expTag(p.experience_level) : null;
     const selected = id !== null && selectedForSwap === id;
+    // Who plays a bye is the draw's business, and a played match must be reset
+    // before its players move — so those slots aren't directly editable.
+    const canEditSlot = editable && !match.is_bye;
 
     return (
       <div
@@ -314,10 +338,32 @@ export default function MatchCard({
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5">
             <button
-              disabled={!swapMode || p === null}
-              onClick={() => p && onSelectForSwap(p.id)}
-              className={`min-w-0 truncate text-left ${swapMode && p ? "hover:underline cursor-pointer" : "cursor-default"}`}
-              title={swapMode ? "Click to select for swap" : undefined}
+              // Swap mode keeps its original job (pick two players to exchange).
+              // Otherwise an admin clicking a name — or a TBD — edits that slot.
+              disabled={swapMode ? p === null : !canEditSlot}
+              onClick={() => {
+                if (swapMode) {
+                  if (p) onSelectForSwap(p.id);
+                } else {
+                  setEditingSlot((v) => (v === side ? null : side));
+                }
+              }}
+              className={`min-w-0 truncate text-left ${
+                swapMode && p
+                  ? "hover:underline cursor-pointer"
+                  : canEditSlot
+                    ? "hover:underline decoration-dotted underline-offset-2 cursor-text"
+                    : "cursor-default"
+              }`}
+              title={
+                swapMode
+                  ? "Click to select for swap"
+                  : canEditSlot
+                    ? p
+                      ? `Edit ${p.full_name}`
+                      : "Set who plays here"
+                    : undefined
+              }
             >
               <span className={isSearched ? "bg-amber-200/70 rounded px-1 -mx-1" : undefined}>
                 {isByeSlot ? <span className="text-slate-400 italic">Bye</span> : p ? p.full_name : "TBD"}
@@ -425,8 +471,30 @@ export default function MatchCard({
       } ${highlight ? "border-court ring-2 ring-court/60 shadow-md" : "border-slate-200"}`}
     >
       {playerRow("a", match.player_a_id)}
+      {editingSlot === "a" && (
+        <SlotEditor
+          player={match.player_a_id !== null ? players.get(match.player_a_id) ?? null : null}
+          players={players}
+          taken={match.player_b_id}
+          canClear={match.round_number > 1}
+          onRename={renamePlayer}
+          onAssign={(pid) => assignSlot("a", pid)}
+          onClose={() => setEditingSlot(null)}
+        />
+      )}
       <div className="border-t border-slate-100" />
       {playerRow("b", match.player_b_id)}
+      {editingSlot === "b" && (
+        <SlotEditor
+          player={match.player_b_id !== null ? players.get(match.player_b_id) ?? null : null}
+          players={players}
+          taken={match.player_a_id}
+          canClear={match.round_number > 1}
+          onRename={renamePlayer}
+          onAssign={(pid) => assignSlot("b", pid)}
+          onClose={() => setEditingSlot(null)}
+        />
+      )}
 
       {/* Schedule row */}
       {(editable || match.scheduled_time) && !match.is_bye && (
@@ -501,6 +569,130 @@ export default function MatchCard({
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+/** Edit one side of a match, in place on the card.
+ *
+ * Covers the two things an organiser actually needs at the court side: fix a
+ * player's name (which corrects the entry itself, everywhere), and decide who
+ * occupies a slot — filling a TBD in a later round without having to score the
+ * match that feeds it, or clearing it back again. The player list is confined
+ * to this draw, which is also what the server enforces.
+ */
+function SlotEditor({
+  player,
+  players,
+  taken,
+  canClear,
+  onRename,
+  onAssign,
+  onClose,
+}: {
+  player: Player | null;
+  players: Map<number, Player>;
+  taken: number | null;
+  canClear: boolean;
+  onRename: (p: Player, name: string) => Promise<unknown>;
+  onAssign: (playerId: number | null) => Promise<void>;
+  onClose: () => void;
+}) {
+  const [name, setName] = useState(player?.full_name ?? "");
+  const [query, setQuery] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function run(fn: () => Promise<unknown>, fallback: string) {
+    setBusy(true);
+    setErr(null);
+    try {
+      await fn();
+    } catch (e) {
+      setErr(errText(e, fallback));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // Everyone in this draw except whoever is already on the other side.
+  const options = [...players.values()]
+    .filter((p) => p.id !== taken && p.id !== player?.id)
+    .filter((p) => p.full_name.toLowerCase().includes(query.trim().toLowerCase()))
+    .sort((a, b) => a.full_name.localeCompare(b.full_name))
+    .slice(0, 8);
+
+  return (
+    <div className="border-t border-slate-100 bg-slate-50 px-2.5 py-2 space-y-2">
+      {player && (
+        <div className="space-y-1">
+          <div className="text-[10px] uppercase tracking-wide text-slate-400">Name</div>
+          <div className="flex gap-1.5">
+            <input
+              autoFocus
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && name.trim()) run(() => onRename(player, name), "Rename failed.");
+                if (e.key === "Escape") onClose();
+              }}
+              className="flex-1 min-w-0 rounded border border-slate-200 px-1.5 py-1 text-xs"
+            />
+            <button
+              onClick={() => run(() => onRename(player, name), "Rename failed.")}
+              disabled={busy || !name.trim() || name === player.full_name}
+              className="text-xs bg-court text-white px-2 py-1 rounded disabled:opacity-40"
+            >
+              Save
+            </button>
+          </div>
+        </div>
+      )}
+
+      <div className="space-y-1">
+        <div className="text-[10px] uppercase tracking-wide text-slate-400">
+          {player ? "Replace with" : "Who plays here"}
+        </div>
+        <input
+          autoFocus={!player}
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Type a name from this draw…"
+          className="w-full rounded border border-slate-200 px-1.5 py-1 text-xs"
+        />
+        <div className="max-h-32 overflow-y-auto rounded border border-slate-200 bg-white divide-y divide-slate-100">
+          {options.length === 0 && (
+            <div className="px-2 py-1.5 text-[11px] text-slate-400">No one matches that.</div>
+          )}
+          {options.map((o) => (
+            <button
+              key={o.id}
+              onClick={() => run(() => onAssign(o.id), "Could not set that player.")}
+              disabled={busy}
+              className="w-full text-left px-2 py-1.5 text-xs text-slate-700 hover:bg-court/5"
+            >
+              {o.full_name}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {err && <div className="text-[11px] text-red-600 bg-red-50 rounded px-2 py-1">{err}</div>}
+
+      <div className="flex items-center gap-2">
+        {player && canClear && (
+          <button
+            onClick={() => run(() => onAssign(null), "Could not clear the slot.")}
+            disabled={busy}
+            className="text-xs px-2 py-1 rounded border border-slate-200 text-slate-500"
+          >
+            Clear to TBD
+          </button>
+        )}
+        <button onClick={onClose} className="text-xs px-2 py-1 rounded border border-slate-200 text-slate-500">
+          Close
+        </button>
+      </div>
     </div>
   );
 }

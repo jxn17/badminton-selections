@@ -129,6 +129,12 @@ class WalkinIn(BaseModel):
     group_label: str | None = None  # men only; ignored for women
 
 
+class MatchSlotIn(BaseModel):
+    """Put a player into one side of a match, or clear it back to TBD."""
+    slot: str  # 'a' or 'b'
+    player_id: int | None = None
+
+
 class PlayerUpdateIn(BaseModel):
     """Admin correction to an entry. Any field left out is not touched.
 

@@ -248,6 +248,12 @@ export const api = {
     }),
   unretire: (matchId: number) => req<Partial<Match>>(`/api/admin/matches/${matchId}/retire`, { method: "DELETE" }),
   resetMatch: (matchId: number) => req<Partial<Match>>(`/api/admin/matches/${matchId}/reset`, { method: "POST" }),
+  /** Put a player into one side of a match, or pass null to clear it to TBD. */
+  setMatchSlot: (matchId: number, slot: "a" | "b", player_id: number | null) =>
+    req<Partial<Match>>(`/api/admin/matches/${matchId}/slot`, {
+      method: "PUT",
+      body: JSON.stringify({ slot, player_id }),
+    }),
   setSchedule: (matchId: number, scheduled_time: string) =>
     req<Partial<Match>>(`/api/admin/matches/${matchId}/schedule`, {
       method: "PUT",

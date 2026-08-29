@@ -36,6 +36,7 @@ from ..service import (
 from ..schemas import (
     ClearScheduleIn,
     FlagIn,
+    MatchSlotIn,
     MoveToGroupIn,
     NoShowIn,
     PlayerUpdateIn,
@@ -242,6 +243,66 @@ async def reset_match(
     m.no_show_player_id = None
     m.status = MatchStatus.pending
     record(db, admin, "reset_match", "match", m.id, before, match_snapshot(m))
+    await db.commit()
+    return match_snapshot(m)
+
+
+@router.put("/matches/{match_id}/slot")
+async def set_match_slot(
+    match_id: int,
+    body: MatchSlotIn,
+    db: AsyncSession = Depends(get_db),
+    admin: str = Depends(require_admin),
+):
+    """Put a player into one side of a match, or clear it back to TBD.
+
+    This is the manual override for advancement: a later-round slot that says
+    TBD can be filled in directly, without entering a score for the match that
+    feeds it. Guarded so it can never silently destroy a result — a match that
+    has already been played has to be reset first, and byes are left to the draw
+    (use a walk-in to occupy one).
+    """
+    if body.slot not in ("a", "b"):
+        raise HTTPException(422, detail={"message": "Slot must be 'a' or 'b'."})
+    m = await _match(db, match_id)
+
+    if m.is_bye:
+        raise HTTPException(
+            409,
+            detail={"message": "This is a bye — add a walk-in to give them an opponent."},
+        )
+    if m.games or m.winner_id is not None or m.status != MatchStatus.pending:
+        raise HTTPException(
+            409,
+            detail={"message": "This match already has a result. Reset it first, then set the players."},
+        )
+
+    player = None
+    if body.player_id is not None:
+        player = await db.get(Player, body.player_id)
+        if player is None:
+            raise HTTPException(404, detail={"message": "Player not found."})
+        # Confine a player to their own draw; crossing brackets would put someone
+        # in a group they were never entered into.
+        t = m.tournament
+        if player.category != t.category or player.group_label != t.group_label:
+            raise HTTPException(
+                422,
+                detail={"message": f"{player.full_name} isn't in this draw."},
+            )
+        other = m.player_b_id if body.slot == "a" else m.player_a_id
+        if other == player.id:
+            raise HTTPException(
+                422, detail={"message": "That player is already on the other side of this match."}
+            )
+
+    before = match_snapshot(m)
+    if body.slot == "a":
+        m.player_a_id = body.player_id
+    else:
+        m.player_b_id = body.player_id
+    await db.flush()
+    record(db, admin, "set_slot", "match", m.id, before, match_snapshot(m))
     await db.commit()
     return match_snapshot(m)
 

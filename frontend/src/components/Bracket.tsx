@@ -144,6 +144,7 @@ export default function Bracket({ data, editable, onChanged, onCountsChanged, fo
     editable,
     onMatchUpdated: patchMatch,
     onCountsChanged: handleCountsChanged,
+    onRosterChanged: onChanged,
     swapMode,
     selectedForSwap: selected,
     onSelectForSwap,

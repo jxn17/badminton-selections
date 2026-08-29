@@ -25,8 +25,9 @@ HEADER = (
 )
 
 
-# 16 men so all four groups get a drawable roster (>= 2) after the snake draft.
-def _entries(n_men: int = 16, n_women: int = 8) -> str:
+# 18 men so the snake draft gives 5/5/4/4 — the five-player groups draw a
+# bracket of 8 with byes, which several tests below need.
+def _entries(n_men: int = 18, n_women: int = 8) -> str:
     rows = [HEADER]
     for i in range(n_men):
         rows.append(
@@ -365,3 +366,132 @@ async def test_edit_is_written_to_the_audit_log(client, seeded):
     await client.patch(f"/api/admin/players/{p['id']}", json={"full_name": "Audited Name"})
     audit = (await client.get("/api/admin/audit")).json()
     assert any(a["action"] == "edit_player" and a["entity_id"] == p["id"] for a in audit)
+
+
+# --------------------------------------------------------------------------
+# Setting who plays a slot directly on the bracket (the TBD override).
+# --------------------------------------------------------------------------
+async def _group_a(client: AsyncClient) -> dict:
+    return (await client.get("/api/bracket", params={"category": "men", "group": "A"})).json()
+
+
+async def test_fill_a_tbd_slot_from_the_bracket(client, seeded):
+    await _login(client)
+    b = await _group_a(client)
+    later = next(m for m in b["matches"] if m["round_number"] > 1 and m["player_a_id"] is None)
+    someone = b["players"][0]["id"]
+
+    r = await client.put(
+        f"/api/admin/matches/{later['id']}/slot", json={"slot": "a", "player_id": someone}
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["player_a_id"] == someone
+
+    fresh = await _group_a(client)
+    assert next(m for m in fresh["matches"] if m["id"] == later["id"])["player_a_id"] == someone
+
+
+async def _advance_one(client: AsyncClient) -> tuple[dict, str]:
+    """Score a first-round match so its winner really is sitting in the next one.
+
+    Returns (next_match, slot) so a test doesn't have to guess which draws
+    happen to have someone advanced already.
+    """
+    b = await _group_a(client)
+    m = next(
+        x for x in b["matches"] if not x["is_bye"] and x["player_a_id"] and x["player_b_id"]
+    )
+    await client.put(
+        f"/api/admin/matches/{m['id']}/score",
+        json={"games": [{"game_number": 1, "score_a": 21, "score_b": 4}]},
+    )
+    fresh = await _group_a(client)
+    nxt = next(x for x in fresh["matches"] if x["id"] == m["next_match_id"])
+    return nxt, ("a" if m["position_in_round"] % 2 == 0 else "b")
+
+
+async def test_clear_a_slot_back_to_tbd(client, seeded):
+    await _login(client)
+    nxt, slot = await _advance_one(client)
+    assert nxt[f"player_{slot}_id"] is not None  # the advanced winner
+    r = await client.put(
+        f"/api/admin/matches/{nxt['id']}/slot", json={"slot": slot, "player_id": None}
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()[f"player_{slot}_id"] is None
+
+
+async def test_slot_refuses_a_player_from_another_draw(client, seeded):
+    """Crossing brackets would put someone in a group they never entered."""
+    await _login(client)
+    a = await _group_a(client)
+    other = (await client.get("/api/bracket", params={"category": "men", "group": "B"})).json()
+    later = next(m for m in a["matches"] if m["round_number"] > 1)
+    r = await client.put(
+        f"/api/admin/matches/{later['id']}/slot",
+        json={"slot": "a", "player_id": other["players"][0]["id"]},
+    )
+    assert r.status_code == 422
+    assert "isn't in this draw" in r.json()["detail"]["message"]
+
+
+async def test_slot_refuses_the_same_player_on_both_sides(client, seeded):
+    await _login(client)
+    nxt, slot = await _advance_one(client)
+    occupant = nxt[f"player_{slot}_id"]
+    other = "b" if slot == "a" else "a"
+    r = await client.put(
+        f"/api/admin/matches/{nxt['id']}/slot", json={"slot": other, "player_id": occupant}
+    )
+    assert r.status_code == 422
+
+
+async def test_slot_refuses_a_match_that_has_been_played(client, seeded):
+    """Moving players under a finished result would silently invalidate it."""
+    await _login(client)
+    b = await _group_a(client)
+    played = next(
+        m for m in b["matches"] if not m["is_bye"] and m["player_a_id"] and m["player_b_id"]
+    )
+    await client.put(
+        f"/api/admin/matches/{played['id']}/score",
+        json={"games": [{"game_number": 1, "score_a": 21, "score_b": 4}]},
+    )
+    r = await client.put(
+        f"/api/admin/matches/{played['id']}/slot",
+        json={"slot": "a", "player_id": played["player_b_id"]},
+    )
+    assert r.status_code == 409
+    assert "Reset it first" in r.json()["detail"]["message"]
+
+
+async def test_slot_refuses_a_bye(client, seeded):
+    await _login(client)
+    b = await _group_a(client)
+    bye = next(m for m in b["matches"] if m["is_bye"])
+    r = await client.put(
+        f"/api/admin/matches/{bye['id']}/slot",
+        json={"slot": "a", "player_id": b["players"][0]["id"]},
+    )
+    assert r.status_code == 409
+
+
+async def test_slot_validates_its_inputs_and_requires_admin(client, seeded):
+    b = await _group_a(client)
+    later = next(m for m in b["matches"] if m["round_number"] > 1)
+    assert (
+        await client.put(f"/api/admin/matches/{later['id']}/slot", json={"slot": "a"})
+    ).status_code == 401
+
+    await _login(client)
+    assert (
+        await client.put(f"/api/admin/matches/{later['id']}/slot", json={"slot": "z"})
+    ).status_code == 422
+    assert (
+        await client.put(
+            f"/api/admin/matches/{later['id']}/slot", json={"slot": "a", "player_id": 999999}
+        )
+    ).status_code == 404
+    assert (
+        await client.put("/api/admin/matches/999999/slot", json={"slot": "a"})
+    ).status_code == 404
