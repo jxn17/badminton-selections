@@ -1,7 +1,12 @@
-"""Format-driven scoring, winner determination and bracket advancement.
+"""Scoring, winner determination and bracket advancement.
 
-Nothing here hardcodes 15/21/30 — every rule is read from the resolved
-`RoundFormat` (per-round override if present, else the tournament default).
+The rule is deliberately simple: **whoever scored more points wins**. Scores are
+never rejected for failing to reach a target, for not winning by two, or for
+exceeding a cap — trials get played to whatever length the schedule allows, and
+the app's job is to record what happened, not to argue with the organiser.
+
+`RoundFormat` survives for display (the "1 game to 21" caption) and for how many
+game boxes a card shows, but it no longer gates whether a scoreline is accepted.
 """
 from __future__ import annotations
 
@@ -73,52 +78,25 @@ class GameResult:
 
 
 def evaluate_game(fmt: RoundFormat, a: int, b: int) -> GameResult:
-    """Classify one game's scores against the format.
+    """Classify one game's scores: whoever has more points has won it.
 
-    - 'a'/'b'   : that side has legally won the game
-    - 'incomplete': valid so far but no winner yet (e.g. live 10-8, or deuce 15-14)
-    - 'invalid' : impossible under the format (surfaced as an inline cell error)
+    - 'a'/'b'     : that side scored more and wins the game
+    - 'incomplete': scores are level, so there is nothing to decide yet
+    - 'invalid'   : only a negative score, which can't be a real scoreline
+
+    Deliberately unconditional. There is no target score, no win-by-two and no
+    cap: a trial gets played to whatever the court agreed on and shortened all
+    day as the schedule slips, so the app refusing an organiser's scoreline
+    ("that isn't 21") was rejecting results that had genuinely happened. The
+    format is still carried for display and for how many game boxes to show,
+    but it no longer decides whether a score is allowed.
     """
-    ptw = fmt.points_to_win
-    cap = fmt.hard_cap
-
     if a < 0 or b < 0:
         return GameResult("invalid", "Scores must be non-negative.")
-    if cap is not None and (a > cap or b > cap):
-        return GameResult("invalid", f"Score cannot exceed the hard cap of {cap}.")
-
-    hi, lo = (a, b) if a >= b else (b, a)
-    winner = "a" if a > b else ("b" if b > a else None)
-    margin = hi - lo
-
-    if hi < ptw:
-        return GameResult("incomplete")  # nobody has reached the target yet
-
-    if winner is None:
-        return GameResult("invalid", f"Both sides cannot reach {ptw}; a game needs a winner.")
-
-    # Hard cap ends the game immediately, ignoring the win-by-two rule.
-    if cap is not None and hi == cap:
-        return GameResult(winner)
-
-    if fmt.win_by_two:
-        if hi == ptw:
-            if margin >= 2:
-                return GameResult(winner)
-            return GameResult("incomplete")  # e.g. 15-14 -> deuce continues
-        # hi > ptw: in deuce a game is won by exactly two.
-        if margin == 2:
-            return GameResult(winner)
-        if margin < 2:
-            return GameResult("incomplete")  # 16-15
-        return GameResult("invalid", "In deuce, a game is won by exactly two points.")
-
-    # No win-by-two: first to points_to_win wins; you cannot exceed it (no cap logic hit).
-    if hi == ptw:
-        return GameResult(winner)
-    return GameResult(
-        "invalid", f"Score cannot exceed {ptw} without a win-by-two rule."
-    )
+    if a == b:
+        # Includes the 0-0 of an untouched row: nobody is ahead, so nobody won.
+        return GameResult("incomplete")
+    return GameResult("a" if a > b else "b")
 
 
 # --------------------------------------------------------------------------
@@ -151,6 +129,14 @@ def _match_winner_from_games(
     if wins_a >= need:
         return match.player_a_id, results
     if wins_b >= need:
+        return match.player_b_id, results
+    # Nobody has taken the format's full number of games yet, but if one side is
+    # simply ahead on games won, they're the one to put through — the same
+    # "whoever is ahead advances" rule as a single game. Only a genuine tie
+    # (including no games at all) leaves the match undecided.
+    if wins_a > wins_b:
+        return match.player_a_id, results
+    if wins_b > wins_a:
         return match.player_b_id, results
     return None, results
 

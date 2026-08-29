@@ -69,6 +69,16 @@ export default function MatchCard({
   // half-typed.
   const dirtyRef = useRef(false);
 
+  // Fresh player data wins over the optimistic star/check overrides. Without
+  // this they are sticky for the life of the card, so a player marked reported
+  // somewhere else — the global search, or another admin's device — would never
+  // show up as checked here. `players` only changes identity when the bracket
+  // actually reloads, so this doesn't fight the instant local flip.
+  useEffect(() => {
+    setFlagOverride({});
+    setReportedOverride({});
+  }, [players]);
+
   // Bring a searched-for tie onto the screen and keep it there.
   //
   // Both the phone and desktop layouts render every card; the copy that isn't in

@@ -66,6 +66,9 @@ export default function SearchBar({ isAdmin, onPick, onChanged }: Props) {
     setResults((prev) => prev.map((x) => (x.id === r.id ? { ...x, reported: next } : x)));
     try {
       await api.reportPlayer(r.id, next);
+      // Refresh the draw too: the same player carries a check on their match
+      // card, and marking someone in from here has to show up there as well.
+      onChanged();
     } catch {
       setResults((prev) => prev.map((x) => (x.id === r.id ? { ...x, reported: !next } : x)));
     }

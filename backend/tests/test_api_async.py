@@ -175,7 +175,8 @@ async def test_score_entry_round_trips_and_advances(client, seeded):
     assert nxt[slot] == match["player_a_id"]
 
 
-async def test_invalid_score_is_rejected_with_the_offending_game(client, seeded):
+async def test_any_scoreline_is_accepted_and_the_leader_advances(client, seeded):
+    """A score that fits no standard format is still a result: 40-15 stands."""
     await _login(client)
     bracket = (await client.get("/api/bracket", params={"category": "men", "group": "A"})).json()
     match = next(
@@ -187,8 +188,37 @@ async def test_invalid_score_is_rejected_with_the_offending_game(client, seeded)
         f"/api/admin/matches/{match['id']}/score",
         json={"games": [{"game_number": 1, "score_a": 40, "score_b": 15}]},
     )
-    assert r.status_code == 422
-    assert r.json()["detail"]["game_number"] == 1
+    assert r.status_code == 200, r.text
+    assert r.json()["winner_id"] == match["player_a_id"]
+
+    # A short, schedule-squeezed game counts exactly the same way.
+    other = next(
+        m
+        for m in bracket["matches"]
+        if not m["is_bye"] and m["player_a_id"] and m["player_b_id"] and m["id"] != match["id"]
+    )
+    r = await client.put(
+        f"/api/admin/matches/{other['id']}/score",
+        json={"games": [{"game_number": 1, "score_a": 2, "score_b": 5}]},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["winner_id"] == other["player_b_id"]
+
+
+async def test_a_level_score_does_not_pick_a_winner(client, seeded):
+    await _login(client)
+    bracket = (await client.get("/api/bracket", params={"category": "men", "group": "A"})).json()
+    match = next(
+        m
+        for m in bracket["matches"]
+        if not m["is_bye"] and m["player_a_id"] and m["player_b_id"]
+    )
+    r = await client.put(
+        f"/api/admin/matches/{match['id']}/score",
+        json={"games": [{"game_number": 1, "score_a": 9, "score_b": 9}]},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["winner_id"] is None
 
 
 async def test_writes_require_an_admin_session(client, seeded):

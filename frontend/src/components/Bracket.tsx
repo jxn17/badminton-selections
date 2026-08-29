@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { BracketFocus, Bracket as BracketData, Match, api } from "../api";
 import { groupByRound, playerMap, resolveFormat, roundName, roundNameShort } from "../bracket";
 import MatchCard from "./MatchCard";
@@ -26,7 +26,9 @@ export default function Bracket({ data, editable, onChanged, onCountsChanged, fo
   const rounds = groupByRound(matches);
   const roundNumbers = [...rounds.keys()].sort((a, b) => a - b);
   const totalRounds = roundNumbers.length;
-  const players = playerMap(data.players);
+  // Memoised so its identity changes only when fresh player data actually
+  // arrives — MatchCard keys its optimistic star/check overrides off that.
+  const players = useMemo(() => playerMap(data.players), [data.players]);
 
   const [swapMode, setSwapMode] = useState(false);
   const [selected, setSelected] = useState<number | null>(null);

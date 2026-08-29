@@ -37,63 +37,41 @@ def fmt(ptw=15, wbt=True, cap=None, games=1):
 @pytest.mark.parametrize(
     "a,b,ptw,wbt,cap,expected",
     [
+        # The only rule: more points wins. The format columns are varied here on
+        # purpose to show they no longer change the outcome.
         (15, 10, 15, True, None, "a"),
         (10, 15, 15, True, None, "b"),
-        (15, 14, 15, True, None, "incomplete"),  # deuce continues
-        (17, 15, 15, True, None, "a"),           # won by two in deuce
-        (16, 15, 15, True, None, "incomplete"),  # 1-point lead in deuce
-        (20, 15, 15, True, None, "invalid"),     # can't win by >2 in deuce
-        (11, 5, 11, False, None, "a"),           # no win-by-two
-        (12, 5, 11, False, None, "invalid"),     # can't exceed target
-        (10, 8, 15, True, None, "incomplete"),   # live, nobody at target
-        (21, 20, 15, True, 21, "a"),             # hard cap ends it
-        (22, 20, 15, True, 21, "invalid"),       # over the cap
-        (15, 15, 15, True, None, "invalid"),     # tie can't both reach target
+        (15, 14, 15, True, None, "a"),    # one ahead is still ahead (was "deuce")
+        (17, 15, 15, True, None, "a"),
+        (16, 15, 15, True, None, "a"),
+        (20, 15, 15, True, None, "a"),    # margin > 2 in "deuce" — fine now
+        (11, 5, 11, False, None, "a"),
+        (12, 5, 11, False, None, "a"),    # past the target — fine now
+        (10, 8, 15, True, None, "a"),     # short game, nobody near 15 — still a win
+        (21, 20, 15, True, 21, "a"),
+        (22, 20, 15, True, 21, "a"),      # past the cap — fine now
+        (3, 1, 21, True, 30, "a"),        # a heavily shortened game still counts
+        (15, 15, 15, True, None, "incomplete"),  # level: nothing to decide
+        (0, 0, 21, True, 30, "incomplete"),      # untouched row
     ],
 )
-def test_evaluate_game(a, b, ptw, wbt, cap, expected):
+def test_evaluate_game_is_just_whoever_scored_more(a, b, ptw, wbt, cap, expected):
     assert evaluate_game(fmt(ptw, wbt, cap), a, b).status == expected
 
 
-# --------------------------------------------------------------------------
-# Golden point / sudden death: hard_cap == points_to_win means the game ends
-# the instant either side reaches the target, no matter the margin — i.e. at
-# parity one below the target (14-14 for a 15-point game, 10-10 for 11-point),
-# the very next point decides it. This is the *existing* generic evaluate_game
-# logic; these tests pin down that the trick actually produces "golden point"
-# behaviour for the specific formats the user asked to support.
-# --------------------------------------------------------------------------
-@pytest.mark.parametrize(
-    "ptw,a,b,expected",
-    [
-        # 11-point game, golden point (cap == 11)
-        (11, 10, 10, "incomplete"),  # parity one below target -> not decided yet
-        (11, 11, 10, "a"),           # next point wins outright, no 2-point margin needed
-        (11, 10, 11, "b"),
-        (11, 12, 10, "invalid"),     # game must have ended at 11-10; can't reach 12
-        (11, 9, 8, "incomplete"),    # ordinary live rally, nobody at target
-        # 15-point game, golden point (cap == 15)
-        (15, 14, 14, "incomplete"),
-        (15, 15, 14, "a"),
-        (15, 14, 15, "b"),
-        (15, 16, 14, "invalid"),
-        # 21-point game, golden point (cap == 21) — same trick at badminton's usual length
-        (21, 20, 20, "incomplete"),
-        (21, 21, 20, "a"),
-        (21, 22, 20, "invalid"),
-    ],
-)
-def test_golden_point(ptw, a, b, expected):
-    golden = fmt(ptw=ptw, wbt=True, cap=ptw)  # hard_cap == points_to_win => golden point
-    assert evaluate_game(golden, a, b).status == expected
+def test_negative_scores_are_still_rejected():
+    """The one thing that can't be a real scoreline."""
+    assert evaluate_game(fmt(), -1, 5).status == "invalid"
+    assert evaluate_game(fmt(), 5, -2).status == "invalid"
 
 
-def test_golden_point_does_not_affect_normal_leads():
-    """A side that's already 2+ ahead at the target still wins normally under
-    golden point — the rule only changes what happens exactly AT parity."""
-    golden = fmt(ptw=15, wbt=True, cap=15)
-    assert evaluate_game(golden, 15, 10).status == "a"
-    assert evaluate_game(golden, 15, 13).status == "a"
+@pytest.mark.parametrize("ptw,cap,wbt", [(11, 11, True), (15, None, False), (21, 30, True)])
+def test_format_no_longer_constrains_the_result(ptw, cap, wbt):
+    """Same scoreline, wildly different formats, same verdict every time."""
+    f = fmt(ptw=ptw, wbt=wbt, cap=cap)
+    assert evaluate_game(f, 9, 4).status == "a"
+    assert evaluate_game(f, 4, 9).status == "b"
+    assert evaluate_game(f, 7, 7).status == "incomplete"
 
 
 async def _setup(db, n=8, seed=1):
@@ -155,11 +133,43 @@ async def test_score_advances_winner(db):
     assert advanced == winner_id
 
 
-async def test_invalid_score_raises(db):
+async def test_unusual_scorelines_are_accepted_and_advance_the_leader(db):
+    """Scorelines the old target/win-by-two/cap rules rejected now just work.
+
+    The format here is a 15-point game, and none of these fit it — that's the
+    point: the organiser's number is the result.
+    """
+    t = await _setup(db, n=8, seed=3)
+    for game in (GameInput(1, 20, 15), GameInput(1, 3, 1), GameInput(1, 40, 2)):
+        m = next(m for m in await _round(db, t, 1) if not m.is_bye)
+        winner = m.player_a_id
+        await apply_scores(db, m, [game], "admin@test.dev")
+        await db.commit()
+        assert m.status == MatchStatus.completed
+        assert m.winner_id == winner
+        nxt = await db.get(Match, m.next_match_id)
+        advanced = nxt.player_a_id if m.position_in_round % 2 == 0 else nxt.player_b_id
+        assert advanced == winner
+
+
+async def test_level_score_leaves_the_match_undecided(db):
+    """Nobody is ahead, so nobody advances."""
+    t = await _setup(db, n=8, seed=3)
+    m = next(m for m in await _round(db, t, 1) if not m.is_bye)
+    await apply_scores(db, m, [GameInput(1, 12, 12)], "admin@test.dev")
+    await db.commit()
+    assert m.winner_id is None
+    assert m.status == MatchStatus.in_progress
+    nxt = await db.get(Match, m.next_match_id)
+    advanced = nxt.player_a_id if m.position_in_round % 2 == 0 else nxt.player_b_id
+    assert advanced is None
+
+
+async def test_negative_score_is_rejected(db):
     t = await _setup(db, n=8, seed=3)
     m = next(m for m in await _round(db, t, 1) if not m.is_bye)
     with pytest.raises(ScoringError):
-        await apply_scores(db, m, [GameInput(1, 20, 15)], "admin@test.dev")  # >2 in deuce
+        await apply_scores(db, m, [GameInput(1, -5, 15)], "admin@test.dev")
 
 
 async def test_retirement_advances_opponent(db):
