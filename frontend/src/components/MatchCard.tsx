@@ -93,36 +93,56 @@ export default function MatchCard({
     let cancelled = false;
     let tries = 0;
 
-    // Bottom edge of whatever sticky bars are pinned to the top right now
-    // (header + the search/tabs/toolbar block), so we don't count a card as
-    // visible while it's actually tucked underneath them.
+    // Bottom edge of whatever sticky bars are currently pinned above us — the
+    // header, the search/tabs/toolbar block, and on phones the round picker —
+    // so we never call a card "visible" while it's tucked underneath them.
+    //
+    // They pin at different offsets (0, the header's height, the whole stack's
+    // height), so "is it pinned" can't be a test against the top of the screen:
+    // it's whether the bar is sitting exactly at its own CSS `top`, rather than
+    // still scrolling along with the page.
     const stickyBottom = (): number => {
       let bottom = 0;
       document.querySelectorAll<HTMLElement>(".sticky").forEach((bar) => {
+        if (bar.contains(el)) return; // never measure a bar we live inside
+        const cs = getComputedStyle(bar);
+        if (cs.position !== "sticky") return;
+        const cssTop = parseFloat(cs.top);
+        if (Number.isNaN(cssTop)) return;
         const r = bar.getBoundingClientRect();
-        if (r.top <= 1 && r.height > 0) bottom = Math.max(bottom, r.bottom);
+        if (r.height === 0) return; // hidden at this breakpoint
+        if (Math.abs(r.top - cssTop) < 2) bottom = Math.max(bottom, r.bottom);
       });
       return bottom;
     };
 
-    // null = this copy is the hidden (display:none) one; true = needs scrolling
-    // (off-screen or under the header); false = comfortably in view.
-    const offScreen = (): boolean | null => {
-      if (el.offsetParent === null) return null;
-      const r = el.getBoundingClientRect();
-      if (r.height === 0) return null;
-      return r.bottom <= stickyBottom() + 8 || r.top >= window.innerHeight - 8;
-    };
+    const GAP = 12; // breathing room between the pinned bars and the card
 
     const step = () => {
       if (cancelled) return;
-      const state = offScreen();
-      if (state === null || state === false) return; // hidden copy, or already visible
-      el.scrollIntoView({
-        behavior: tries === 0 && !reduced ? "smooth" : "auto",
-        block: "center",
-        inline: "center",
-      });
+      if (el.offsetParent === null) return; // the hidden (other-breakpoint) copy
+      const sticky = stickyBottom();
+      const r = el.getBoundingClientRect();
+      if (r.height === 0) return;
+
+      // Good enough = fully clear of the pinned bars and inside the viewport.
+      if (r.top >= sticky + GAP - 4 && r.bottom <= window.innerHeight - 4) return;
+
+      const behavior: ScrollBehavior = tries === 0 && !reduced ? "smooth" : "auto";
+
+      // Horizontal only (the desktop round strip) — done instantly, since we
+      // work out the vertical position ourselves below.
+      el.scrollIntoView({ block: "nearest", inline: "center", behavior: "auto" });
+
+      // Centre the card in the space that's actually visible *below* the pinned
+      // bars, never in the raw viewport: with a tall sticky stack (an admin on a
+      // phone can have ~360px of it) viewport-centring tucks the card underneath.
+      const rect = el.getBoundingClientRect();
+      const region = Math.max(0, window.innerHeight - sticky);
+      const desiredTop = sticky + Math.max(GAP, (region - rect.height) / 2);
+      const target = Math.max(0, window.scrollY + (rect.top - desiredTop));
+      window.scrollTo({ top: target, behavior });
+
       tries += 1;
       // Re-check with setTimeout (which fires even when the tab isn't painting,
       // unlike rAF or a smooth scroll): if the first, smooth scroll stalled or a

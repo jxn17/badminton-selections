@@ -175,20 +175,30 @@ export default function Bracket({ data, editable, onChanged, onCountsChanged, fo
 
       {/* Phone view: pick a round, see its matches stacked full-width. */}
       <div className="md:hidden">
-        <div className="flex gap-1.5 overflow-x-auto pb-2 -mx-1 px-1">
-          {roundNumbers.map((rn) => (
-            <button
-              key={rn}
-              onClick={() => setMobileRound(rn)}
-              className={`shrink-0 px-3 py-1.5 rounded-full text-xs font-medium border ${
-                mobileRound === rn ? "bg-court text-white border-court" : "bg-white text-slate-600 border-slate-200"
-              }`}
-            >
-              {roundNameShort(rn, totalRounds)}
-            </button>
-          ))}
+        {/* The round picker stays pinned directly under the header/toolbar stack
+            (whose measured height App publishes as --stack-h), so you can jump
+            between rounds from anywhere in a long draw instead of scrolling all
+            the way back to the top. Bleeds to the page edges so the cards pass
+            cleanly underneath it rather than showing down the sides. */}
+        <div
+          style={{ top: "var(--stack-h, 228px)" }}
+          className="sticky z-10 bg-slate-50 -mx-4 px-4 pt-2 pb-1.5 border-b border-slate-200"
+        >
+          <div className="flex gap-1.5 overflow-x-auto -mx-1 px-1">
+            {roundNumbers.map((rn) => (
+              <button
+                key={rn}
+                onClick={() => setMobileRound(rn)}
+                className={`shrink-0 px-3 py-1.5 rounded-full text-xs font-medium border ${
+                  mobileRound === rn ? "bg-court text-white border-court" : "bg-white text-slate-600 border-slate-200"
+                }`}
+              >
+                {roundNameShort(rn, totalRounds)}
+              </button>
+            ))}
+          </div>
         </div>
-        <div className="text-xs text-slate-400 mb-2">
+        <div className="text-xs text-slate-400 mb-2 mt-2">
           {roundName(mobileRound, totalRounds)} · {rounds.get(mobileRound)?.length ?? 0} matches
         </div>
         <div className="space-y-3">

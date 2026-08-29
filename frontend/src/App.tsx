@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { BracketFocus, Bracket as BracketData, Category, GroupSummary, api } from "./api";
 import { useAuth } from "./useAuth";
 import Bracket from "./components/Bracket";
@@ -28,6 +28,8 @@ export default function App() {
   const focusNonce = useRef(0);
   const timer = useRef<number | null>(null);
   const selRef = useRef<Selection | null>(null);
+  const headerRef = useRef<HTMLElement | null>(null);
+  const stickyBarRef = useRef<HTMLDivElement | null>(null);
 
   const loadGroups = useCallback(async () => {
     try {
@@ -116,6 +118,43 @@ export default function App() {
     if (!auth.isAdmin && view === "flagged") setView("bracket");
   }, [auth.isAdmin, view]);
 
+  /* Publish the height of the pinned header + toolbar stack as CSS variables.
+   *
+   * The bracket's mobile round tabs pin themselves directly beneath this stack,
+   * and its height is genuinely variable — the admin toolbar appears and
+   * disappears, the group tabs wrap differently per screen width, the login
+   * panel opens. Measuring beats the magic number this used to rely on, which
+   * was already a pixel off and would only have drifted further. */
+  const measureStack = useCallback(() => {
+    const header = headerRef.current?.offsetHeight ?? 0;
+    const bar = stickyBarRef.current?.offsetHeight ?? 0;
+    const root = document.documentElement;
+    root.style.setProperty("--hdr-h", `${header}px`);
+    root.style.setProperty("--stack-h", `${header + bar}px`);
+  }, []);
+
+  // Re-measure after every render. Everything that changes the bar's height —
+  // groups arriving, the admin toolbar appearing, the login panel opening —
+  // also re-renders App, so this keeps the offsets right on its own. That
+  // matters because ResizeObserver below is driven by the rendering loop and
+  // doesn't fire at all in a tab that isn't painting.
+  useLayoutEffect(measureStack);
+
+  // Belt and braces for the height changes App does NOT re-render for: a late
+  // web font, rotating the phone, or a resize that re-wraps the group tabs.
+  useEffect(() => {
+    const ro = new ResizeObserver(measureStack);
+    if (headerRef.current) ro.observe(headerRef.current);
+    if (stickyBarRef.current) ro.observe(stickyBarRef.current);
+    window.addEventListener("resize", measureStack);
+    window.addEventListener("orientationchange", measureStack);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("resize", measureStack);
+      window.removeEventListener("orientationchange", measureStack);
+    };
+  }, [measureStack]);
+
   const menGroups = useMemo(
     () => groups.filter((g) => g.category === "men").sort((a, b) => (a.group_label ?? "").localeCompare(b.group_label ?? "")),
     [groups],
@@ -126,7 +165,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen flex flex-col">
-      <header className="bg-white border-b border-slate-200 sticky top-0 z-20">
+      <header ref={headerRef} className="bg-white border-b border-slate-200 sticky top-0 z-20">
         <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between gap-3 flex-wrap">
           <div className="flex items-center gap-2">
             <span className="text-court text-xl">🏸</span>
@@ -163,7 +202,11 @@ export default function App() {
 
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 py-5">
         {/* Search + group tabs + admin toolbar stay pinned while the bracket scrolls. */}
-        <div className="sticky top-[57px] z-10 bg-slate-50 pt-1 pb-3 -mx-4 px-4 border-b border-slate-200">
+        <div
+          ref={stickyBarRef}
+          style={{ top: "var(--hdr-h, 57px)" }}
+          className="sticky z-10 bg-slate-50 pt-1 pb-3 -mx-4 px-4 border-b border-slate-200"
+        >
         {/* Player search */}
         <div className="mb-4">
           <SearchBar isAdmin={auth.isAdmin} onChanged={refresh} onPick={showInBracket} />
