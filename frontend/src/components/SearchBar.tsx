@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Category, SearchMatch, SearchResult, api, currentMatch } from "../api";
+import { ApiError, Category, PlayerEdit, SearchMatch, SearchResult, api, currentMatch } from "../api";
 
 interface Props {
   isAdmin: boolean;
@@ -14,6 +14,7 @@ export default function SearchBar({ isAdmin, onPick, onChanged }: Props) {
   const [results, setResults] = useState<SearchResult[]>([]);
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [editingId, setEditingId] = useState<number | null>(null);
   const boxRef = useRef<HTMLDivElement>(null);
 
   // Debounced search.
@@ -74,6 +75,27 @@ export default function SearchBar({ isAdmin, onPick, onChanged }: Props) {
     }
   }
 
+  /** Apply an entry correction, then refresh: the name shows on match cards too. */
+  async function saveEdit(r: SearchResult, patch: PlayerEdit) {
+    const updated = await api.updatePlayer(r.id, patch);
+    setResults((prev) =>
+      prev.map((x) =>
+        x.id === r.id
+          ? {
+              ...x,
+              full_name: updated.full_name,
+              phone: updated.phone,
+              registration_number: updated.registration_number,
+              year_of_study: updated.year_of_study,
+              experience_level: updated.experience_level,
+            }
+          : x,
+      ),
+    );
+    setEditingId(null);
+    onChanged();
+  }
+
   const groupLabel = (r: SearchResult) => (r.category === "men" ? `Group ${r.group_label}` : "Women");
 
   return (
@@ -132,6 +154,18 @@ export default function SearchBar({ isAdmin, onPick, onChanged }: Props) {
                   )}
                   {isAdmin && (
                     <button
+                      onClick={() => setEditingId((v) => (v === r.id ? null : r.id))}
+                      className={`text-xs font-medium px-2.5 py-1 rounded-md border ${
+                        editingId === r.id
+                          ? "border-court text-white bg-court"
+                          : "border-slate-200 text-slate-500 hover:bg-slate-50"
+                      }`}
+                    >
+                      Edit
+                    </button>
+                  )}
+                  {isAdmin && (
+                    <button
                       onClick={() => remove(r)}
                       className="text-xs font-medium px-2.5 py-1 rounded-md border border-red-300 text-red-600 bg-red-50 hover:bg-red-100"
                     >
@@ -140,6 +174,15 @@ export default function SearchBar({ isAdmin, onPick, onChanged }: Props) {
                   )}
                 </div>
               </div>
+              {isAdmin && editingId === r.id && (
+                <EntryEditor
+                  key={`edit-${r.id}`}
+                  player={r}
+                  onSave={(patch) => saveEdit(r, patch)}
+                  onCancel={() => setEditingId(null)}
+                />
+              )}
+
               {/* Match info — each row jumps to that tie in the bracket. */}
               <div className="mt-1 space-y-0.5">
                 {r.matches.length === 0 && <div className="text-xs text-slate-400">No draw yet.</div>}
@@ -171,5 +214,113 @@ export default function SearchBar({ isAdmin, onPick, onChanged }: Props) {
         </div>
       )}
     </div>
+  );
+}
+
+/** Inline correction form for one entry.
+ *
+ * Entries arrive from a Google Form filled in by hundreds of students, so the
+ * data is only as good as what they typed — this is how an organiser fixes a
+ * misspelt name or a wrong phone number without touching the database. Only the
+ * fields that are safe to change mid-event appear: category and group decide
+ * which draw someone is in, so those stay with the rebuild / move-to-group
+ * tools that know how to redraw a bracket afterwards.
+ */
+function EntryEditor({
+  player,
+  onSave,
+  onCancel,
+}: {
+  player: SearchResult;
+  onSave: (patch: PlayerEdit) => Promise<void>;
+  onCancel: () => void;
+}) {
+  const [name, setName] = useState(player.full_name);
+  const [phone, setPhone] = useState(player.phone ?? "");
+  const [reg, setReg] = useState(player.registration_number ?? "");
+  const [year, setYear] = useState(player.year_of_study ?? "");
+  const [exp, setExp] = useState(player.experience_level ?? "");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function submit() {
+    setBusy(true);
+    setError(null);
+    try {
+      await onSave({
+        full_name: name,
+        phone,
+        registration_number: reg,
+        year_of_study: year,
+        experience_level: exp,
+      });
+    } catch (e) {
+      const d = e instanceof ApiError ? e.detail : null;
+      setError(
+        d && typeof d === "object" && "message" in (d as any)
+          ? String((d as any).message)
+          : "Could not save that change.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="mt-2 rounded-md border border-slate-200 bg-slate-50 p-2 space-y-1.5">
+      <Row label="Name">
+        <input value={name} onChange={(e) => setName(e.target.value)} className={INPUT} />
+      </Row>
+      <Row label="Phone">
+        <input
+          value={phone}
+          onChange={(e) => setPhone(e.target.value)}
+          inputMode="tel"
+          placeholder="10 digits; +91 and spaces are fine"
+          className={INPUT}
+        />
+      </Row>
+      <Row label="Reg no.">
+        <input value={reg} onChange={(e) => setReg(e.target.value)} className={INPUT} />
+      </Row>
+      <Row label="Year">
+        <input value={year} onChange={(e) => setYear(e.target.value)} className={INPUT} />
+      </Row>
+      <Row label="Level">
+        <input
+          value={exp}
+          onChange={(e) => setExp(e.target.value)}
+          placeholder="Nationals / District / School / Casual / Beginner"
+          className={INPUT}
+        />
+      </Row>
+      {error && <div className="text-[11px] text-red-600 bg-red-50 rounded px-2 py-1">{error}</div>}
+      <div className="flex items-center gap-2 pt-0.5">
+        <button
+          onClick={submit}
+          disabled={busy}
+          className="text-xs bg-court text-white px-2.5 py-1 rounded disabled:opacity-40"
+        >
+          {busy ? "Saving…" : "Save changes"}
+        </button>
+        <button onClick={onCancel} className="text-xs px-2.5 py-1 rounded border border-slate-200 text-slate-500">
+          Cancel
+        </button>
+        <span className="text-[10px] text-slate-400">
+          Level affects group balance the next time the men's draw is rebuilt.
+        </span>
+      </div>
+    </div>
+  );
+}
+
+const INPUT = "flex-1 min-w-0 rounded border border-slate-200 px-1.5 py-1 text-xs";
+
+function Row({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <label className="flex items-center gap-2">
+      <span className="w-14 shrink-0 text-[10px] uppercase tracking-wide text-slate-400">{label}</span>
+      {children}
+    </label>
   );
 }

@@ -252,3 +252,116 @@ async def test_search_shows_phone_only_to_admins(client, seeded):
 @pytest.mark.parametrize("q", ["", "a"])
 async def test_search_ignores_too_short_queries(client, seeded, q):
     assert (await client.get("/api/search", params={"q": q})).json() == []
+
+
+# --------------------------------------------------------------------------
+# Editing an entry. The roster comes off a Google Form filled in by hundreds of
+# students, so corrections mid-event are routine.
+# --------------------------------------------------------------------------
+async def _find(client: AsyncClient, name: str) -> dict:
+    results = (await client.get("/api/search", params={"q": name})).json()
+    return next(r for r in results if r["full_name"] == name)
+
+
+async def test_edit_entry_updates_every_field(client, seeded):
+    await _login(client)
+    p = await _find(client, "Man 3")
+    r = await client.patch(
+        f"/api/admin/players/{p['id']}",
+        json={
+            "full_name": "  Manny   Threeson ",
+            "phone": "+91 98765 43210",
+            "registration_number": "261090059999",
+            "year_of_study": "3rd Year",
+            "experience_level": "Nationals",
+        },
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["full_name"] == "Manny Threeson"  # whitespace collapsed
+    assert body["phone"] == "9876543210"  # normalized to 10 digits
+    assert body["registration_number"] == "261090059999"
+    assert body["year_of_study"] == "3rd Year"
+    assert body["experience_level"] == "Nationals"
+
+    # ...and it's what the draw serves afterwards.
+    again = await _find(client, "Manny Threeson")
+    assert again["phone"] == "9876543210"
+
+
+async def test_edit_leaves_omitted_fields_alone(client, seeded):
+    await _login(client)
+    p = await _find(client, "Man 4")
+    r = await client.patch(
+        f"/api/admin/players/{p['id']}", json={"year_of_study": "4th Year"}
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["full_name"] == "Man 4"
+    assert r.json()["phone"] == p["phone"]
+
+
+async def test_edit_renames_the_player_in_the_bracket(client, seeded):
+    await _login(client)
+    p = await _find(client, "Man 5")
+    await client.patch(f"/api/admin/players/{p['id']}", json={"full_name": "Renamed Player"})
+    bracket = (
+        await client.get(
+            "/api/bracket", params={"category": "men", "group": p["group_label"]}
+        )
+    ).json()
+    assert any(x["full_name"] == "Renamed Player" for x in bracket["players"])
+
+
+async def test_edit_rejects_an_empty_name_and_a_bad_phone(client, seeded):
+    await _login(client)
+    p = await _find(client, "Man 6")
+    assert (
+        await client.patch(f"/api/admin/players/{p['id']}", json={"full_name": "   "})
+    ).status_code == 422
+    assert (
+        await client.patch(f"/api/admin/players/{p['id']}", json={"phone": "12345"})
+    ).status_code == 422
+
+
+async def test_edit_refuses_to_duplicate_another_entry(client, seeded):
+    """Two entries can't end up with the same identity — the unique index would
+    reject it anyway, so say who it clashed with instead of throwing a 500."""
+    await _login(client)
+    a = await _find(client, "Man 7")
+    b = await _find(client, "Man 8")
+    r = await client.patch(f"/api/admin/players/{a['id']}", json={"phone": b["phone"]})
+    assert r.status_code == 409
+    assert "Man 8" in r.json()["detail"]["message"]
+
+
+async def test_edit_keeps_identity_in_step_so_reimport_still_matches(client, seeded, db):
+    """Correcting a phone must move the dedup key with it, or re-importing the
+    CSV would file the same person again as a new entry."""
+    from sqlalchemy import select
+
+    from app.models import Player
+
+    await _login(client)
+    p = await _find(client, "Man 9")
+    await client.patch(f"/api/admin/players/{p['id']}", json={"phone": "9000099000"})
+    row = (await db.execute(select(Player).where(Player.id == p["id"]))).scalar_one()
+    await db.refresh(row)
+    assert row.dedup_key == "ph:9000099000"
+
+
+async def test_edit_requires_admin_and_a_real_player(client, seeded):
+    assert (
+        await client.patch("/api/admin/players/1", json={"full_name": "Nope"})
+    ).status_code == 401
+    await _login(client)
+    assert (
+        await client.patch("/api/admin/players/999999", json={"full_name": "Nope"})
+    ).status_code == 404
+
+
+async def test_edit_is_written_to_the_audit_log(client, seeded):
+    await _login(client)
+    p = await _find(client, "Man 10")
+    await client.patch(f"/api/admin/players/{p['id']}", json={"full_name": "Audited Name"})
+    audit = (await client.get("/api/admin/audit")).json()
+    assert any(a["action"] == "edit_player" and a["entity_id"] == p["id"] for a in audit)

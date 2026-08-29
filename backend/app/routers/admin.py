@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .. import cache
 from ..audit import match_snapshot, record
 from ..auth import require_admin
-from ..csv_import import import_csv
+from ..csv_import import dedup_key_for, import_csv, normalize_phone
 from ..database import get_db
 from ..models import Category, Match, MatchStatus, Player, RoundFormat, Tournament, TournamentStatus
 from ..scoring import (
@@ -38,6 +38,7 @@ from ..schemas import (
     FlagIn,
     MoveToGroupIn,
     NoShowIn,
+    PlayerUpdateIn,
     ReportIn,
     ScheduleDayIn,
     ScheduleSpecificIn,
@@ -348,6 +349,97 @@ async def flag_player(
     record(db, admin, "flag_player", "player", p.id, before, {"flagged": p.flagged, "flag_note": p.flag_note})
     await db.commit()
     return {"id": p.id, "flagged": p.flagged, "flag_note": p.flag_note}
+
+
+@router.patch("/players/{player_id}")
+async def update_player(
+    player_id: int,
+    body: PlayerUpdateIn,
+    db: AsyncSession = Depends(get_db),
+    admin: str = Depends(require_admin),
+):
+    """Correct an entry: a typo'd name, a wrong phone, a missing reg number.
+
+    Entries come straight off a Google Form filled in by ~400 students, so some
+    of them are simply wrong. Everything here is safe to change mid-event — none
+    of it affects who plays whom. Category and group are not editable (see
+    PlayerUpdateIn); experience level is, and it re-tiers the player the next
+    time the men's groups are rebuilt.
+    """
+    p = await db.get(Player, player_id)
+    if p is None:
+        raise HTTPException(404, "Player not found.")
+
+    def snapshot() -> dict:
+        return {
+            "full_name": p.full_name,
+            "phone": p.phone_normalized,
+            "registration_number": p.registration_number,
+            "year_of_study": p.year_of_study,
+            "experience_level": p.experience_level,
+            "dedup_key": p.dedup_key,
+        }
+
+    before = snapshot()
+
+    if body.full_name is not None:
+        name = " ".join(body.full_name.split())
+        if not name:
+            raise HTTPException(422, detail={"message": "Name can't be empty."})
+        p.full_name = name
+    if body.phone is not None:
+        raw = body.phone.strip()
+        norm = normalize_phone(raw)
+        if raw and norm is None:
+            raise HTTPException(
+                422, detail={"message": "That doesn't look like a phone number (need 10 digits)."}
+            )
+        p.phone_raw = raw or None
+        p.phone_normalized = norm
+    if body.registration_number is not None:
+        p.registration_number = body.registration_number.strip() or None
+    if body.year_of_study is not None:
+        p.year_of_study = body.year_of_study.strip() or None
+    if body.experience_level is not None:
+        p.experience_level = body.experience_level.strip() or None
+
+    # Identity is derived from phone -> registration -> name, so correcting any
+    # of them can change it. Keep it in step, or re-importing the CSV would file
+    # this person as a brand new entry instead of recognising them.
+    key = dedup_key_for(p.phone_normalized, p.registration_number or "", p.full_name)
+    if p.is_walkin:
+        key += ":walkin"
+    if key != p.dedup_key:
+        clash = (
+            await db.execute(
+                select(Player).where(
+                    Player.dedup_key == key,
+                    Player.category == p.category,
+                    Player.id != p.id,
+                )
+            )
+        ).scalars().first()
+        if clash is not None:
+            # The unique index would reject this anyway; say who it collided with.
+            raise HTTPException(
+                409,
+                detail={
+                    "message": f"Those details already belong to {clash.full_name}. "
+                    "If they're the same person, remove one of the two entries."
+                },
+            )
+        p.dedup_key = key
+
+    record(db, admin, "edit_player", "player", p.id, before, snapshot())
+    await db.commit()
+    return {
+        "id": p.id,
+        "full_name": p.full_name,
+        "phone": p.phone_normalized,
+        "registration_number": p.registration_number,
+        "year_of_study": p.year_of_study,
+        "experience_level": p.experience_level,
+    }
 
 
 @router.delete("/players/{player_id}")

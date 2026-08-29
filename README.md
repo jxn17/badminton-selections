@@ -33,6 +33,13 @@ docker-compose.yml  local all-in-one (app + Postgres)
   (⭐ a player so they're kept even if they lose a good match), **swap players**
   (rebalance who-plays-whom before matches start), and **walk-ins** (add a spot
   entry; auto-slotted into an open bye).
+- **Edit any entry (admin only):** search a name → **Edit** to fix a misspelt name,
+  a wrong phone, a missing registration number, year, or level of experience. Entries
+  come off a Google Form filled in by hundreds of students, so corrections are routine.
+  Identity moves with the correction, so a later re-import still recognises the same
+  person rather than adding them twice; clashing details are refused by name. Category
+  and group aren't editable here — they decide which draw someone is in, so those stay
+  with **Move to group** / rebuild, which redraw the bracket properly.
 - **Find a player, land on their tie:** search a name and click either the name or
   one of their listed matches — the app switches to that group, scrolls the tie into
   view, rings the card and highlights the player inside it. On phones it also flips

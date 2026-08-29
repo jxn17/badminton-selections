@@ -173,7 +173,10 @@ async def search_players(request: Request, q: str = "", db: AsyncSession = Depen
                 "category": p.category.value,
                 "group_label": p.group_label,
                 "experience_level": p.experience_level,
+                "year_of_study": p.year_of_study,
                 "phone": p.phone_normalized if include_pii else None,
+                # Admin-only, same as phone — and what the entry editor loads.
+                "registration_number": p.registration_number if include_pii else None,
                 "reported": p.reported if include_pii else False,
                 "matches": match_infos,
             }

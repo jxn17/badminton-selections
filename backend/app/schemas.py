@@ -129,6 +129,20 @@ class WalkinIn(BaseModel):
     group_label: str | None = None  # men only; ignored for women
 
 
+class PlayerUpdateIn(BaseModel):
+    """Admin correction to an entry. Any field left out is not touched.
+
+    Category and group are deliberately absent: they decide which draw someone
+    belongs in, and moving between draws has to rebuild brackets — that is what
+    'Move to group' and the rebuild actions are for.
+    """
+    full_name: str | None = None
+    phone: str | None = None
+    registration_number: str | None = None
+    year_of_study: str | None = None
+    experience_level: str | None = None
+
+
 class RoundFormatIn(BaseModel):
     round_number: int | None = None
     points_to_win: int = 21

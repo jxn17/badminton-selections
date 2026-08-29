@@ -99,9 +99,20 @@ export interface SearchResult {
   category: Category;
   group_label: string | null;
   experience_level: string | null;
+  year_of_study: string | null;
   phone: string | null;
+  registration_number: string | null; // admin-only, like phone
   reported: boolean;
   matches: SearchMatch[];
+}
+
+/** The correctable fields of an entry. Omit one to leave it untouched. */
+export interface PlayerEdit {
+  full_name?: string;
+  phone?: string;
+  registration_number?: string;
+  year_of_study?: string;
+  experience_level?: string;
 }
 
 /** Where the bracket should jump to after a search hit: the group that holds
@@ -182,6 +193,15 @@ export const api = {
   clearSchedule: (targets: { category: Category; group: string | null }[]) =>
     req<any>("/api/admin/clear-schedule", { method: "POST", body: JSON.stringify({ targets }) }),
   removePlayer: (id: number) => req<{ removed: number; name: string }>(`/api/admin/players/${id}`, { method: "DELETE" }),
+  updatePlayer: (id: number, body: PlayerEdit) =>
+    req<{
+      id: number;
+      full_name: string;
+      phone: string | null;
+      registration_number: string | null;
+      year_of_study: string | null;
+      experience_level: string | null;
+    }>(`/api/admin/players/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
   bracket: (category: Category, group?: string | null) => {
     const q = new URLSearchParams({ category });
     if (group) q.set("group", group);
