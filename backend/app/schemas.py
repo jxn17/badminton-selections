@@ -22,6 +22,7 @@ class PlayerOut(BaseModel):
     flagged: bool = False
     flag_note: str | None = None
     reported: bool = False  # checked in at the venue (admin-only signal)
+    struck: bool = False  # crossed off the draw (admin-only signal)
     # Admin-only (null on public responses):
     phone: str | None = None
     registration_number: str | None = None
@@ -192,6 +193,10 @@ class ClearScheduleIn(BaseModel):
 
 class ReportIn(BaseModel):
     reported: bool
+
+
+class StrikeIn(BaseModel):
+    struck: bool
 
 
 class NoShowIn(BaseModel):

@@ -495,3 +495,103 @@ async def test_slot_validates_its_inputs_and_requires_admin(client, seeded):
     assert (
         await client.put("/api/admin/matches/999999/slot", json={"slot": "a"})
     ).status_code == 404
+
+
+# --------------------------------------------------------------------------
+# Striking a player off the draw. Unlike no-show/RET this is a marker on the
+# person, so it has to work whoever (if anyone) is on the other side.
+# --------------------------------------------------------------------------
+async def _players_of(client: AsyncClient) -> dict:
+    b = await _group_a(client)
+    return {p["id"]: p for p in b["players"]}
+
+
+async def test_strike_and_unstrike_a_player(client, seeded):
+    await _login(client)
+    pid = next(iter(await _players_of(client)))
+
+    r = await client.post(f"/api/admin/players/{pid}/strike", json={"struck": True})
+    assert r.status_code == 200, r.text
+    assert r.json()["struck"] is True
+    assert (await _players_of(client))[pid]["struck"] is True
+
+    r = await client.post(f"/api/admin/players/{pid}/strike", json={"struck": False})
+    assert r.status_code == 200, r.text
+    assert (await _players_of(client))[pid]["struck"] is False
+
+
+@pytest.mark.parametrize("opponent", ["real", "tbd", "bye"])
+async def test_strike_works_whoever_is_on_the_other_side(client, seeded, opponent):
+    """The whole point: no-show and RET both demand two present players, and a
+    strike must not — it applies to a bye, and to a slot still showing TBD."""
+    await _login(client)
+    b = await _group_a(client)
+
+    if opponent == "real":
+        m = next(
+            x for x in b["matches"] if not x["is_bye"] and x["player_a_id"] and x["player_b_id"]
+        )
+        pid = m["player_a_id"]
+    elif opponent == "bye":
+        m = next(x for x in b["matches"] if x["is_bye"])
+        pid = m["player_a_id"] or m["player_b_id"]
+    else:  # a player whose next-round opponent is still undecided
+        m = next(
+            x
+            for x in b["matches"]
+            if x["round_number"] > 1
+            and ((x["player_a_id"] is None) != (x["player_b_id"] is None))
+        )
+        pid = m["player_a_id"] or m["player_b_id"]
+
+    r = await client.post(f"/api/admin/players/{pid}/strike", json={"struck": True})
+    assert r.status_code == 200, r.text
+    assert (await _players_of(client))[pid]["struck"] is True
+
+
+async def test_striking_never_moves_anyone_through_the_bracket(client, seeded):
+    """A strike is cosmetic bookkeeping — it must not decide a match."""
+    await _login(client)
+    b = await _group_a(client)
+    m = next(
+        x for x in b["matches"] if not x["is_bye"] and x["player_a_id"] and x["player_b_id"]
+    )
+    await client.post(f"/api/admin/players/{m['player_a_id']}/strike", json={"struck": True})
+
+    fresh = await _group_a(client)
+    same = next(x for x in fresh["matches"] if x["id"] == m["id"])
+    assert same["winner_id"] is None
+    assert same["status"] == "pending"
+    nxt = next(x for x in fresh["matches"] if x["id"] == m["next_match_id"])
+    slot = "player_a_id" if m["position_in_round"] % 2 == 0 else "player_b_id"
+    assert nxt[slot] is None
+
+
+async def test_struck_is_admin_only_and_never_public(client, seeded):
+    await _login(client)
+    pid = next(iter(await _players_of(client)))
+    await client.post(f"/api/admin/players/{pid}/strike", json={"struck": True})
+
+    # Sign out and read the same draw as a visitor.
+    await client.post("/api/auth/logout")
+    cache.invalidate()
+    public = await _group_a(client)
+    assert all(p["struck"] is False for p in public["players"])
+    assert (
+        await client.post(f"/api/admin/players/{pid}/strike", json={"struck": True})
+    ).status_code == 401
+
+
+async def test_strike_404s_on_an_unknown_player(client, seeded):
+    await _login(client)
+    assert (
+        await client.post("/api/admin/players/999999/strike", json={"struck": True})
+    ).status_code == 404
+
+
+async def test_strike_is_written_to_the_audit_log(client, seeded):
+    await _login(client)
+    pid = next(iter(await _players_of(client)))
+    await client.post(f"/api/admin/players/{pid}/strike", json={"struck": True})
+    audit = (await client.get("/api/admin/audit")).json()
+    assert any(a["action"] == "strike_player" and a["entity_id"] == pid for a in audit)

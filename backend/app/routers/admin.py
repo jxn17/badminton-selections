@@ -43,6 +43,7 @@ from ..schemas import (
     ReportIn,
     ScheduleDayIn,
     ScheduleSpecificIn,
+    StrikeIn,
     GenerateDrawIn,
     RetireIn,
     RoundFormatIn,
@@ -373,6 +374,30 @@ async def report_player(
     record(db, admin, "report_player", "player", p.id, before, {"reported": p.reported})
     await db.commit()
     return {"id": p.id, "reported": p.reported}
+
+
+@router.post("/players/{player_id}/strike")
+async def strike_player(
+    player_id: int,
+    body: StrikeIn,
+    db: AsyncSession = Depends(get_db),
+    admin: str = Depends(require_admin),
+):
+    """Cross a player off the draw, or put them back.
+
+    Unconditional by design: it's a marker on the person, not on a match, so it
+    works whoever they happen to be up against — a real opponent, a bye, or a
+    slot that still says TBD. Nothing in the bracket moves as a result; use
+    no-show or a score when a result should actually advance someone.
+    """
+    p = await db.get(Player, player_id)
+    if p is None:
+        raise HTTPException(404, "Player not found.")
+    before = {"struck": p.struck}
+    p.struck = body.struck
+    record(db, admin, "strike_player", "player", p.id, before, {"struck": p.struck})
+    await db.commit()
+    return {"id": p.id, "struck": p.struck}
 
 
 @router.post("/schedule-specific")

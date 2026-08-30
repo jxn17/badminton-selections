@@ -74,6 +74,10 @@ class Player(Base):
     flag_note: Mapped[str | None] = mapped_column(String(300))
     # Checked in at the venue. Admin-only operational flag (not the shortlist star).
     reported: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # Crossed off the draw: out of contention, withdrew, didn't turn up. Purely a
+    # marker — it never moves anyone through the bracket, which is what lets it
+    # apply to any player regardless of whether their opponent is even decided.
+    struck: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     entry_timestamp: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)

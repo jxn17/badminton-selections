@@ -14,6 +14,7 @@ export interface Player {
   flagged: boolean;
   flag_note: string | null;
   reported: boolean; // checked in at the venue (admin-only signal)
+  struck: boolean; // crossed off the draw (admin-only signal)
   phone: string | null; // admin-only; null for public
   registration_number: string | null;
 }
@@ -103,6 +104,7 @@ export interface SearchResult {
   phone: string | null;
   registration_number: string | null; // admin-only, like phone
   reported: boolean;
+  struck: boolean;
   matches: SearchMatch[];
 }
 
@@ -271,6 +273,13 @@ export const api = {
     req<any>(`/api/admin/players/${playerId}/flag`, {
       method: "POST",
       body: JSON.stringify({ flagged, note: note ?? null }),
+    }),
+  /** Cross a player off the draw (or put them back). Purely a marker: it never
+   * advances anyone, which is why it applies whoever their opponent is. */
+  strikePlayer: (playerId: number, struck: boolean) =>
+    req<{ id: number; struck: boolean }>(`/api/admin/players/${playerId}/strike`, {
+      method: "POST",
+      body: JSON.stringify({ struck }),
     }),
   reportPlayer: (playerId: number, reported: boolean) =>
     req<{ id: number; reported: boolean }>(`/api/admin/players/${playerId}/report`, {

@@ -33,6 +33,11 @@ docker-compose.yml  local all-in-one (app + Postgres)
   (⭐ a player so they're kept even if they lose a good match), **swap players**
   (rebalance who-plays-whom before matches start), and **walk-ins** (add a spot
   entry; auto-slotted into an open bye).
+- **Strike a player off (admin only):** the ✗ on a match card (or **Strike** in the
+  search) crosses a name out in red. It's a marker on the *person*, not on a match,
+  so it works whoever they're up against — a real opponent, a bye, or a slot still
+  showing TBD — and it never advances anyone. Use no-show or a score when a result
+  should actually move someone through.
 - **Edit any entry (admin only):** search a name → **Edit** to fix a misspelt name,
   a wrong phone, a missing registration number, year, or level of experience. Entries
   come off a Google Form filled in by hundreds of students, so corrections are routine.

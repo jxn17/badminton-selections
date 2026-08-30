@@ -75,6 +75,17 @@ export default function SearchBar({ isAdmin, onPick, onChanged }: Props) {
     }
   }
 
+  async function toggleStruck(r: SearchResult) {
+    const next = !r.struck;
+    setResults((prev) => prev.map((x) => (x.id === r.id ? { ...x, struck: next } : x)));
+    try {
+      await api.strikePlayer(r.id, next);
+      onChanged(); // the strike shows on their match card too
+    } catch {
+      setResults((prev) => prev.map((x) => (x.id === r.id ? { ...x, struck: !next } : x)));
+    }
+  }
+
   /** Apply an entry correction, then refresh: the name shows on match cards too. */
   async function saveEdit(r: SearchResult, patch: PlayerEdit) {
     const updated = await api.updatePlayer(r.id, patch);
@@ -128,7 +139,13 @@ export default function SearchBar({ isAdmin, onPick, onChanged }: Props) {
                   title={`Show ${r.full_name} in the bracket`}
                   className="text-left font-medium text-slate-800 hover:text-court truncate"
                 >
-                  {r.full_name}
+                  <span
+                    className={
+                      r.struck ? "line-through decoration-2 decoration-red-500/70 text-slate-400" : undefined
+                    }
+                  >
+                    {r.full_name}
+                  </span>
                   <span className="ml-2 text-[10px] font-normal text-white bg-court/80 px-1.5 py-0.5 rounded">
                     {groupLabel(r)}
                   </span>
@@ -150,6 +167,19 @@ export default function SearchBar({ isAdmin, onPick, onChanged }: Props) {
                       }`}
                     >
                       {r.reported ? "✓ Reported" : "Report"}
+                    </button>
+                  )}
+                  {isAdmin && (
+                    <button
+                      onClick={() => toggleStruck(r)}
+                      title={r.struck ? "Struck out — click to restore" : "Strike this player off the draw"}
+                      className={`text-xs font-medium px-2.5 py-1 rounded-md border ${
+                        r.struck
+                          ? "border-red-300 text-red-700 bg-red-50"
+                          : "border-slate-200 text-slate-500 hover:bg-slate-50"
+                      }`}
+                    >
+                      {r.struck ? "✗ Struck" : "Strike"}
                     </button>
                   )}
                   {isAdmin && (

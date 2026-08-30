@@ -88,6 +88,7 @@ async def ensure_incremental_migrations(bind: AsyncEngine) -> None:
     statements = [
         "ALTER TABLE players ADD COLUMN IF NOT EXISTS reported BOOLEAN NOT NULL DEFAULT FALSE",
         "ALTER TABLE matches ADD COLUMN IF NOT EXISTS no_show_player_id INTEGER REFERENCES players(id)",
+        "ALTER TABLE players ADD COLUMN IF NOT EXISTS struck BOOLEAN NOT NULL DEFAULT FALSE",
     ]
     async with bind.begin() as conn:
         for stmt in statements:

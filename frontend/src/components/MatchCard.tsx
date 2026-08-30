@@ -67,6 +67,7 @@ export default function MatchCard({
   // trip lands — these are per-player UI signals, not match state.
   const [flagOverride, setFlagOverride] = useState<Record<number, boolean>>({});
   const [reportedOverride, setReportedOverride] = useState<Record<number, boolean>>({});
+  const [struckOverride, setStruckOverride] = useState<Record<number, boolean>>({});
   // Which side of this card is being edited in place ('a' | 'b' | null).
   const [editingSlot, setEditingSlot] = useState<"a" | "b" | null>(null);
 
@@ -83,6 +84,7 @@ export default function MatchCard({
   useEffect(() => {
     setFlagOverride({});
     setReportedOverride({});
+    setStruckOverride({});
   }, [players]);
 
   // Bring a searched-for tie onto the screen and keep it there.
@@ -280,6 +282,23 @@ export default function MatchCard({
   function isReported(p: Player): boolean {
     return reportedOverride[p.id] ?? p.reported;
   }
+  function isStruck(p: Player): boolean {
+    return struckOverride[p.id] ?? p.struck;
+  }
+
+  /** Cross a player off (or restore them). Deliberately says nothing about the
+   * match: it's a note on the person, so it works on a bye or against a TBD. */
+  async function toggleStruck(p: Player) {
+    const next = !isStruck(p);
+    setStruckOverride((prev) => ({ ...prev, [p.id]: next }));
+    try {
+      await api.strikePlayer(p.id, next);
+      onCountsChanged();
+    } catch (e) {
+      setStruckOverride((prev) => ({ ...prev, [p.id]: !next }));
+      setError(errText(e, "Failed."));
+    }
+  }
 
   /** Rename the player themselves (the same entry the search edits). */
   async function renamePlayer(p: Player, name: string) {
@@ -365,7 +384,11 @@ export default function MatchCard({
                     : undefined
               }
             >
-              <span className={isSearched ? "bg-amber-200/70 rounded px-1 -mx-1" : undefined}>
+              <span
+                className={`${isSearched ? "bg-amber-200/70 rounded px-1 -mx-1" : ""} ${
+                  p && isStruck(p) ? "line-through decoration-2 decoration-red-500/70 text-slate-400" : ""
+                }`}
+              >
                 {isByeSlot ? <span className="text-slate-400 italic">Bye</span> : p ? p.full_name : "TBD"}
               </span>
             </button>
@@ -414,6 +437,17 @@ export default function MatchCard({
             className={`text-sm leading-none px-0.5 ${isReported(p) ? "text-emerald-600" : "text-slate-300 hover:text-emerald-500"}`}
           >
             ✓
+          </button>
+        )}
+        {editable && p && (
+          <button
+            onClick={() => toggleStruck(p)}
+            title={isStruck(p) ? "Struck out — click to restore" : "Strike this player off the draw"}
+            className={`text-sm leading-none px-0.5 font-semibold ${
+              isStruck(p) ? "text-red-600" : "text-slate-300 hover:text-red-500"
+            }`}
+          >
+            ✗
           </button>
         )}
         {editable && p && (
